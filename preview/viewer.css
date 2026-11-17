@@ -496,3 +496,27 @@ body:has(#preview-gallery.expanded:not([hidden])) #navigation { display: none; }
 #floor-pick-hint[data-active="true"] { background: #294a37; color: white; }
 #back-to-house { pointer-events: auto; box-shadow: 0 2px 8px #243a3124; }
 #scene:not(.remote-steering) canvas[data-floor-hover] { cursor: pointer !important; }
+
+/* Shared control baselines and consistent page edges. */
+header select, header button, .menu > summary, #collaboration > summary {
+  min-height: 2.5rem;
+  line-height: 1.25rem;
+}
+.menu > summary, #collaboration > summary { padding-block: .5625rem; }
+#collaboration { align-self: end; }
+.model-fields { align-items: end; }
+.toolbar-field { line-height: 1.25rem; }
+footer { flex-wrap: wrap; justify-content: flex-start; gap: .5rem 1.25rem; line-height: 1.5; }
+footer a { color: inherit; text-underline-offset: .2em; }
+#navigation { margin-left: auto; }
+#warnings { width: calc(100% - 2 * clamp(1rem, 3vw, 2.5rem)); max-width: none; }
+@media (min-width: 821px) and (max-width: 1200px) {
+  header { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title collaborate" "tools tools"; }
+}
+@media (max-width: 820px) {
+  #collaboration { align-self: center; }
+  #warnings { width: calc(100% - 1.6rem); }
+}
+@media (max-width: 580px) {
+  #navigation { width: 100%; margin-left: 0; }
+}
