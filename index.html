@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Renovation preview</title>
+    <link rel="stylesheet" href="/@turnkey/viewer.css">
+    <script type="module" src="/@turnkey/display-controls.mjs"></script>
+    <script type="module" src="/@turnkey/viewer.mjs"></script>
+  </head>
+  <body>
+    <header>
+      <h1>Renovation preview</h1>
+      <div class="toolbar">
+        <details id="model-settings" class="menu">
+          <summary>Model</summary>
+          <div class="model-fields">
+            <label class="toolbar-field" for="scope">Scope
+              <select id="scope" disabled></select>
+            </label>
+            <label class="toolbar-field" for="option" id="option-label" hidden>Option
+              <select id="option" hidden></select>
+            </label>
+            <label class="toolbar-field" for="condition">Condition
+              <select id="condition"><option value="design">Design model</option><option value="existing">Existing · before renovation</option><option value="demolition">Demolition · planned removals</option><option value="proposed">Proposed · finished layout</option></select>
+            </label>
+            <label class="toolbar-field" for="assembly" id="assembly-label" hidden>Layout
+              <select id="assembly" hidden><option value="stacked">Stacked</option><option value="compare">Compare floors</option></select>
+            </label>
+          </div>
+        </details>
+        <details id="display" class="menu">
+          <summary>Display</summary>
+          <div class="display-fields">
+            <label class="check"><input id="wall-cutaway" type="checkbox" checked> Wall cutaway</label>
+            <label class="check"><input id="fixture-lights" type="checkbox" checked> Fixture lights</label>
+            <label class="check"><input id="show-notes" type="checkbox" aria-controls="warnings"> <span>Notes (<span id="note-count">0</span>)</span></label>
+            <label class="check" id="preview-control"><input id="show-previews" type="checkbox" aria-controls="preview-gallery" disabled> Previews <span id="preview-count"></span></label>
+          </div>
+        </details>
+        <button id="toggle-wall-references" type="button" aria-controls="wall-panel" aria-expanded="false" hidden>Wall references</button>
+        <button id="place-furniture" type="button" hidden>Place furniture</button>
+      </div>
+      <details id="collaboration">
+        <summary><span id="collab-label">Collaborate</span> <span id="collab-steering"></span></summary>
+        <div class="collab-panel">
+          <form><label for="collab-name">Your name<input id="collab-name" maxlength="40" required autocomplete="name" placeholder="Name"></label><label for="collab-icon">Your icon<select id="collab-icon"><option>●</option><option>◆</option><option>▲</option><option>★</option><option>♥</option></select></label><button id="collab-submit" type="submit" disabled>Start review</button></form>
+          <p id="collab-status" role="status" aria-live="polite">Start a shared review or open an invitation.</p>
+          <p id="collab-members"></p>
+          <label for="collab-invite" class="sr-only">Invitation link</label><input id="collab-invite" readonly hidden><button id="collab-copy" type="button" hidden>Copy invite</button>
+          <button id="collab-leave" type="button" hidden>Leave</button>
+        </div>
+      </details>
+    </header>
+    <main id="viewport" aria-label="Design viewport">
+      <ul id="warnings" aria-label="Review warnings" hidden></ul>
+      <div id="review-area">
+        <section id="preview-gallery" aria-label="Photo previews" tabindex="-1" hidden>
+          <div class="gallery-bar">
+            <select id="gallery-collection" aria-label="Preview collection">
+              <option value="view">Current view</option>
+              <option value="all">All house previews</option>
+            </select>
+            <span id="gallery-position"></span>
+            <button id="gallery-prev" type="button" aria-label="Previous preview" title="Previous preview">←</button>
+            <button id="gallery-next" type="button" aria-label="Next preview" title="Next preview">→</button>
+            <button id="gallery-close" type="button" aria-label="Close previews" title="Close previews">×</button>
+          </div>
+          <div id="gallery-picker" hidden>
+            <label for="gallery-jump">Jump to preview</label>
+            <select id="gallery-jump"></select>
+          </div>
+          <p id="gallery-empty" hidden>No previews for this view. Choose All house previews to browse the collection.</p>
+          <figure id="gallery-figure">
+            <div id="gallery-stage">
+              <a id="gallery-original" target="_blank" rel="noopener" title="Open original image in a new tab"><img id="gallery-image" alt="" decoding="async"></a>
+              <p id="gallery-error" role="status" hidden>This preview image could not be loaded.</p>
+            </div>
+            <figcaption aria-live="polite" aria-atomic="true">
+              <div class="gallery-meta"><span id="gallery-owner"></span><button id="gallery-expand" type="button" aria-pressed="false">Enlarge</button></div>
+              <h3 id="gallery-title"></h3>
+              <p id="gallery-caption"></p>
+            </figcaption>
+          </figure>
+        </section>
+        <div class="canvas-area">
+          <div id="scene">
+            <div id="collab-cursors" aria-hidden="true"></div>
+            <p id="condition-legend" role="status" hidden></p>
+            <div class="floor-navigation">
+              <span id="floor-pick-hint" hidden>Select a floor</span>
+              <button id="back-to-house" type="button" hidden><span aria-hidden="true">←</span> Whole house</button>
+            </div>
+            <div id="notice" role="status" aria-live="polite">
+              <h2 id="notice-title">Loading design…</h2>
+              <p id="notice-detail"></p>
+            </div>
+          </div>
+          <div class="camera-tools" role="group" aria-label="Camera controls">
+            <label class="sr-only" for="view">View</label>
+            <select id="view"><option value="perspective">3D</option><option value="plan">Plan</option></select>
+            <button id="fit" type="button" disabled>Fit view</button>
+          </div>
+        </div>
+        <button id="fullscreen" type="button" aria-controls="viewport" aria-pressed="false" aria-label="Enter full screen" title="Enter full screen" hidden>
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path class="fullscreen-expand" d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>
+            <path class="fullscreen-collapse" d="M3 8h5V3m8 0v5h5M8 21v-5H3m18 0h-5v5"/>
+          </svg>
+        </button>
+      </div>
+      <section id="wall-panel" aria-labelledby="wall-room-name" hidden>
+        <div class="wall-panel-top"><span class="wall-eyebrow">Wall references</span><button id="close-wall-panel" type="button" aria-label="Hide wall references" title="Hide wall references">×</button></div>
+        <h2 id="wall-room-name"></h2>
+        <label for="wall-choice" class="sr-only">Room wall</label>
+        <select id="wall-choice"></select>
+        <p id="wall-intro">Select a wall number to reference its finish or mark a fixture location.</p>
+        <div id="wall-detail" hidden>
+          <div id="wall-face-caption" class="wall-eyebrow">Inside face · elevation</div>
+          <svg id="wall-elevation" aria-labelledby="wall-face-caption"></svg>
+          <p class="wall-hint">Click the elevation or the wall in 3D, or enter a point in millimetres.</p>
+          <div class="wall-fields">
+            <label>From left (mm)<input id="wall-along" type="number" inputmode="decimal" step="any" min="0" placeholder="—"></label>
+            <label>Above floor (mm)<input id="wall-height" type="number" inputmode="decimal" step="any" min="0" placeholder="—"></label>
+          </div>
+          <div id="wall-reading"></div>
+          <div class="wall-actions"><button id="copy-wall-reference" type="button">Copy wall reference</button><button id="clear-wall-point" type="button" hidden>Clear point</button></div>
+        </div>
+        <p id="wall-status" role="status" aria-live="polite"></p>
+        <textarea id="wall-copy-fallback" aria-label="Wall reference to copy" readonly hidden></textarea>
+      </section>
+      <section id="furniture-editor" hidden aria-label="Furniture placement">
+        <div class="editor-heading">
+          <strong>Furniture &amp; fixtures</strong>
+          <div class="editor-actions">
+            <button id="cancel-placement" type="button" hidden>Cancel</button>
+            <button id="finish-edit" type="button">Close</button>
+          </div>
+        </div>
+        <label class="editor-field">Room <select id="placement-room"></select></label>
+        <div id="placement-tools" hidden>
+          <label class="editor-field">Asset <select id="placement-asset"></select></label>
+          <div class="editor-actions">
+            <label>Anchor height (mm) <input id="placement-height" type="number" min="0" step="any" value="0"></label>
+            <button id="add-item" type="button">Place</button>
+          </div>
+          <label class="editor-field">Placed item <select id="placement-instance"></select></label>
+          <div class="editor-actions">
+            <button id="move-item" type="button">Move</button>
+            <button id="rotate-item" type="button">Rotate 15°</button>
+            <button id="duplicate-item" type="button">Duplicate</button>
+            <button id="remove-item" type="button">Remove</button>
+            <button id="undo-item" type="button">Undo</button>
+          </div>
+        </div>
+        <div id="placement-status" role="status" aria-live="polite"></div>
+        <label id="layout-key-label" class="editor-field" hidden>Owner editing key <input id="layout-key" type="password" autocomplete="off" spellcheck="false" autocapitalize="none"></label>
+        <div class="editor-actions">
+          <button id="save-layout" type="button" hidden>Save room layout</button>
+          <button id="export-layout" type="button" hidden>Export draft CSV</button>
+          <button id="reload-layout" type="button" hidden>Discard draft and load saved layout</button>
+        </div>
+      </section>
+    </main>
+    <footer>
+      <span id="current-scope">Renovation model</span>
+      <a id="accepted-render" hidden target="_blank" rel="noopener">Accepted render</a>
+      <span id="navigation" hidden>Drag to orbit · Middle- or right-drag to pan · Scroll to zoom</span>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,43 @@
+{
+  "name": "turnkey",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local viewer and validation tools for versioned house projects",
+  "type": "module",
+  "repository": "github:ehfeng/turnkey",
+  "bin": {
+    "turnkey": "./bin/turnkey.mjs"
+  },
+  "exports": {
+    "./frame": "./lib/frame.mjs",
+    "./furniture": "./lib/furniture.mjs",
+    "./dom-stub": "./lib/dom-stub.mjs",
+    "./validate": "./lib/validate.mjs",
+    "./renderer-resources": "./lib/renderer-resources.mjs",
+    "./collaboration-protocol": "./shared/collaboration-protocol.mjs",
+    "./rooms": "./server/rooms.mjs",
+    "./vite": "./lib/project-config.mjs"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "server",
+    "shared",
+    "templates",
+    "preview",
+    "index.html"
+  ],
+  "scripts": {
+    "dev": "node bin/turnkey.mjs dev",
+    "build": "node bin/turnkey.mjs build",
+    "test": "node --test tests/*.mjs"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "dependencies": {
+    "three": "0.187.0",
+    "vite": "8.3.8",
+    "ws": "^8.23.0"
+  }
+}

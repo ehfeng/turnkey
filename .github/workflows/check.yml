@@ -1,0 +1,35 @@
+name: Check viewer
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Pack the tagged version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module -e "import pkg from './package.json' with {type:'json'}; if ('v' + pkg.version !== process.env.RELEASE_TAG) throw Error('The release tag must match package.json version');"
+          npm pack
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: viewer-${{ github.ref_name }}
+          path: turnkey-*.tgz
+          if-no-files-found: error

@@ -1,0 +1,2 @@
+item_id,name,phase,option_id,asset_path,spec_path,size_x_mm,size_y_mm,size_z_mm,anchor,x_mm,y_mm,z_mm,yaw_deg,clearance_neg_x_mm,clearance_pos_x_mm,clearance_neg_y_mm,clearance_pos_y_mm,measurement_refs,notes,trade,position,name_zh,scope_flag
+example-shelf,Example shelf,proposed,example-shelf,,,900,300,25,footprint centre at underside,600,400,1000,90,,,,,,Illustrative dimensions for the template example.,carpentry-install,underside 1000 mm above finished floor,示例层板,
