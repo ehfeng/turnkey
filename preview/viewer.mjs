@@ -1,4 +1,5 @@
 import project from 'virtual:turnkey-project';
+import { renovationView, writeRenovationView } from './renovation-views.mjs';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { furnitureEditor } from './furniture-editor.mjs';
@@ -23,9 +24,16 @@ const floorHint = document.querySelector('#floor-pick-hint');
 const optionSelect = document.querySelector('#option');
 const optionLabel = document.querySelector('#option-label');
 const acceptedRender = document.querySelector('#accepted-render');
-const conditionSelect = document.querySelector('#condition');
+const hasDrawings = typeof project.drawings?.buildLevel === 'function' && typeof project.drawings?.buildPreview === 'function';
+const showBefore = document.querySelector('#show-before');
+const showRemovals = document.querySelector('#show-removals');
+const removalsLabel = document.querySelector('#removals-label');
+const openDrawings = document.querySelector('#open-drawings');
+const drawingPhase = document.querySelector('#drawing-phase');
+const phaseLabel = document.querySelector('#drawing-phase-label');
+const backToDesign = document.querySelector('#back-to-design');
+let renovation = { condition: 'design', drawing: null, compare: null };
 const conditionLegend = document.querySelector('#condition-legend');
-const conditionLabel = document.querySelector('label[for="condition"]');
 const viewSelect = document.querySelector('#view');
 const assemblySelect = document.querySelector('#assembly');
 const assemblyLabel = document.querySelector('#assembly-label');
@@ -77,12 +85,34 @@ let editing = false;
 let animated = false;
 let modelKey;
 let layoutWarning, acceptedPhoto;
+let hasMultipleLevels = false;
 let defaultPlanScope = 'house';
 function scopeFromUrl(params) {
   return params.get('scope') ?? (params.get('view') === 'plan' ? defaultPlanScope : 'house');
 }
 let displayedScope;
 let cameraFrame;
+let viewingDrawing = false;
+let modelCamera;
+
+function fitReviewView(frame) {
+  fitView();
+  if (viewingDrawing || !modelCamera) return;
+  const saved = modelCamera;
+  modelCamera = null;
+  if (saved.frame !== frame) return;
+  camera.position.copy(saved.position);
+  controls.target.copy(saved.target);
+  camera.zoom = saved.zoom;
+  if (camera.isOrthographicCamera && saved.halfHeight !== null) {
+    const aspect = Math.max(viewport.clientWidth, 1) / Math.max(viewport.clientHeight, 1);
+    camera.top = saved.halfHeight; camera.bottom = -camera.top;
+    camera.right = camera.top * aspect; camera.left = -camera.right;
+  }
+  camera.updateProjectionMatrix();
+  controls.update();
+  updateClipping();
+}
 let applyingRemote = false;
 let collaboration;
 let canSteer = true;
@@ -100,7 +130,7 @@ const editor = furnitureEditor({
     url.searchParams.set('scope', 'room/' + id);
     url.searchParams.delete('floor');
     url.searchParams.set('view', 'plan');
-    url.searchParams.delete('condition');
+    writeRenovationView(url.searchParams);
     if (url.searchParams.get('option') === 'existing-measured') url.searchParams.delete('option');
     history.pushState(null, '', url);
     await showScope();
@@ -326,29 +356,28 @@ function renderFrame(time) {
   if (animated || fading || cameraMoving || floorMoving) invalidate();
 }
 
-function updateConditionLegend(condition, view) {
-  const plan = view === 'plan';
+function updateConditionLegend(condition, drawing) {
   const captions = {
-    existing: plan ? 'Existing conditions · draft plan' : '',
-    demolition: plan ? 'Red dashes mark planned removals · draft plan' : 'Red marks planned removals',
-    proposed: plan ? 'Blue marks new work · draft plan' : 'Finished layout in the proposed materials',
+    existing: drawing ? 'Existing conditions · draft plan' : 'Before renovation',
+    demolition: drawing ? 'Red dashes mark planned removals · draft plan' : 'Red marks planned removals',
+    proposed: 'Blue marks new work · draft plan',
   };
   const caption = captions[condition] ?? '';
   conditionLegend.textContent = caption;
   conditionLegend.hidden = !caption;
   if (condition === 'demolition') conditionLegend.dataset.color = 'red';
-  else if (condition === 'proposed' && plan) conditionLegend.dataset.color = 'blue';
+  else if (condition === 'proposed' && drawing) conditionLegend.dataset.color = 'blue';
   else delete conditionLegend.dataset.color;
 }
 
 async function updateOptions(scopeId, request) {
-  if (conditionSelect.value === 'existing') {
+  if (renovation.condition === 'existing') {
     acceptedPhoto = null;
     optionSelect.replaceChildren();
     optionSelect.hidden = optionLabel.hidden = acceptedRender.hidden = true;
     return '';
   }
-  const design = conditionSelect.value === 'design';
+  const design = renovation.condition === 'design';
   const options = (await catalog.optionsFor(scopeId)).filter(option => design || option.id !== 'existing-measured');
   const target = await catalog.acceptedTargetFor?.(scopeId);
   if (request !== requestNumber) return;
@@ -428,36 +457,50 @@ async function showScope() {
   const request = ++requestNumber;
   const url = new URL(location.href);
   const params = url.searchParams;
-  const id = scopeFromUrl(params);
-  const isAsset = id.startsWith('asset/');
-  conditionLabel.hidden = conditionSelect.hidden = isAsset;
-  if (isAsset && params.has('condition')) {
-    params.delete('condition');
-    history.replaceState(null, '', url);
+  const route = scopeFromUrl(params);
+  const isAsset = route.startsWith('asset/');
+  renovation = renovationView(params, hasDrawings);
+  if (isAsset) renovation = { condition: 'design', drawing: null, compare: null };
+  if (params.has('condition') || params.has('drawings') || params.has('compare')) {
+    const original = url.href;
+    if (renovation.drawing && params.has('condition') && params.has('assembly') && !params.has('sheetLayout')) {
+      params.set('sheetLayout', params.get('assembly'));
+    }
+    if (params.get('condition') === 'proposed' && params.get('option') === 'existing-measured') params.delete('option');
+    writeRenovationView(params, renovation);
+    if (url.href !== original) history.replaceState(history.state, '', url);
   }
+  const { condition, drawing } = renovation;
+  const floorDrawing = drawing && route === 'house' && catalog.scopes.some(scope => scope.id === 'level/' + params.get('floor'));
+  const id = floorDrawing ? 'level/' + params.get('floor') : route;
+  updateReviewControls(isAsset);
   const previousCutaway = wallCutaway.checked;
   wallCutaway.checked = params.get('cutaway') !== 'off';
-  conditionSelect.disabled = isAsset || !canSteer;
-  conditionSelect.value = !isAsset && ['existing','demolition','proposed'].includes(params.get('condition')) ? params.get('condition') : 'design';
-  const condition = conditionSelect.value;
-  const phaseView = condition !== 'design';
-  viewSelect.value = params.get('view') === 'plan' ? 'plan' : 'perspective';
-  viewSelect.disabled = !canSteer;
-  assemblySelect.value = params.get('assembly') === 'compare' ? 'compare' : 'stacked';
-  assemblySelect.hidden = assemblyLabel.hidden = id !== 'house';
+  viewSelect.value = drawing || params.get('view') === 'plan' ? 'plan' : 'perspective';
+  viewSelect.hidden = Boolean(drawing);
+  viewSelect.disabled = !canSteer || Boolean(drawing);
+  assemblySelect.value = drawing && id === 'house'
+    ? (params.get('sheetLayout') === 'stacked' ? 'stacked' : 'compare')
+    : (params.get('assembly') === 'compare' ? 'compare' : 'stacked');
+  assemblySelect.hidden = assemblyLabel.hidden = !hasMultipleLevels || id !== 'house';
   const scope = catalog.scopes.find((entry) => entry.id === id);
   const existing = condition === 'existing';
   const assembly = id === 'house' ? assemblySelect.value : '';
   const view = viewSelect.value;
-  const key = JSON.stringify([id, existing ? '' : params.get('option'), assembly, condition, phaseView ? view : '']);
-  const frame = JSON.stringify([id, assembly, view]);
+  const key = JSON.stringify([id, existing ? '' : params.get('option'), assembly, condition, drawing]);
+  const frame = JSON.stringify([id, assembly, view, Boolean(drawing)]);
+  if (drawing && cameraFrame && !viewingDrawing && controls && model) {
+    modelCamera = { frame: cameraFrame, position: camera.position.clone(), target: controls.target.clone(),
+      zoom: camera.zoom, halfHeight: camera.isOrthographicCamera ? camera.top : null };
+  }
+  viewingDrawing = Boolean(drawing);
   const keepCamera = cameraFrame === frame;
   let layouts;
   if (model && modelKey === key) {
     applyFloorSelection(params.get('floor'), view === 'plan');
     if (keepCamera) {
       if (previousCutaway !== wallCutaway.checked) applyWallCutaway();
-    } else fitView();
+    } else fitReviewView(frame);
     cameraFrame = frame;
     updateFloorNavigation();
     if (isAsset || existing) return;
@@ -498,7 +541,8 @@ async function showScope() {
       floorCache.delete(oldest);
     }
     const group = cached?.key === key ? cached.group : await catalog.build(id, THREE, {
-      option, assembly: assemblySelect.value, condition: conditionSelect.value, view: viewSelect.value,
+      option, assembly: assemblySelect.value, condition,
+      view: drawing || condition === 'design' ? view : 'perspective',
     });
     if (request !== requestNumber) {
       if (group !== model) releaseModel(group);
@@ -519,7 +563,7 @@ async function showScope() {
       if (typeof object.userData.onFrame === 'function') frameHooks.push(object);
       if (object.userData.animate) animated = true;
     });
-    wallPanel.setModel(conditionSelect.value === 'design' ? group : null, conditionSelect.value === 'design' ? id : '', option);
+    wallPanel.setModel(renovation.condition === 'design' ? group : null, renovation.condition === 'design' ? id : '', option);
     applyFixtureLights();
     displayedScope = id;
     if (id === 'house' && group.children.filter(child => child.userData.levelId).length > 1) {
@@ -529,9 +573,9 @@ async function showScope() {
     if (keepCamera) {
       applyWallCutaway();
       updateClipping();
-    } else fitView();
+    } else fitReviewView(frame);
     cameraFrame = frame;
-    updateConditionLegend(condition, view);
+    updateConditionLegend(condition, drawing);
     renderer.domElement.hidden = false;
     notice.hidden = true;
     navigation.hidden = false;
@@ -539,7 +583,7 @@ async function showScope() {
     collaboration?.viewerReady?.();
     lastFrame = 0;
     modelKey = key;
-    editor.attach(conditionSelect.value === 'design' && option !== 'existing-measured' ? id : '', group, renderer.domElement);
+    editor.attach(renovation.condition === 'design' && option !== 'existing-measured' ? id : '', group, renderer.domElement);
     applyFloorSelection(params.get('floor'), true);
     updateFloorNavigation();
     invalidate();
@@ -582,7 +626,7 @@ function updateFloorNavigation() {
   const plan = viewSelect.value === 'plan';
   let hint = plan ? 'Drag to pan · Scroll to zoom · South up' : 'Drag to orbit · Middle- or right-drag to pan · Scroll to zoom';
   if (floorFocus && !floorFocus.focusedId && !plan) hint += ' · Click a floor to isolate it';
-  else if (conditionSelect.value === 'design' && (floorFocus?.focusedId || displayedScope?.startsWith('level/') || (displayedScope === 'house' && plan))) {
+  else if (renovation.condition === 'design' && (floorFocus?.focusedId || displayedScope?.startsWith('level/') || (displayedScope === 'house' && plan))) {
     hint += ' · Click a room name for wall references';
   }
   navigation.textContent = hint;
@@ -603,10 +647,11 @@ function applyFloorSelection(id, immediate = false) {
   wallTransparency = undefined;
   floorFrameTime = undefined;
   floorFocus.focus(selected, { immediate, fromHover });
+  assemblySelect.hidden = assemblyLabel.hidden = !hasMultipleLevels || Boolean(selected);
   const scope = selected ? 'level/' + selected : 'house';
   const group = focusedGroup() ?? model;
   acceptedRender.hidden = !acceptedPhoto || Boolean(selected && !group.getObjectByName(acceptedPhoto.room_id));
-  const option = optionSelect.value, condition = conditionSelect.value;
+  const option = optionSelect.value, condition = renovation.condition;
   wallPanel.setModel(condition === 'design' ? group : null, scope, option);
   editor.attach(condition === 'design' && option !== 'existing-measured' ? scope : '', group, renderer.domElement);
   const label = selected ? floorName(selected) : 'Whole house';
@@ -659,15 +704,66 @@ wallCutaway.addEventListener('change', () => {
   });
 });
 fixtureLights.addEventListener('change', applyFixtureLights);
-conditionSelect.addEventListener('change', () => {
-  const value = conditionSelect.value;
-  collaboration.runAction(async () => {
+function updateReviewControls(isAsset) {
+  const { drawing, compare } = renovation;
+  showBefore.hidden = isAsset || Boolean(project.designHistoryUrl) || Boolean(drawing) || compare === 'before';
+  openDrawings.hidden = isAsset || !hasDrawings || Boolean(drawing);
+  phaseLabel.hidden = !drawing;
+  if (drawing) drawingPhase.value = drawing;
+  removalsLabel.hidden = isAsset || Boolean(drawing);
+  showRemovals.checked = compare === 'removals';
+  backToDesign.hidden = !drawing && !compare;
+  for (const control of [showBefore, openDrawings, drawingPhase, showRemovals, backToDesign]) control.disabled = !canSteer;
+}
+
+function changeReview(next, scope) {
+  if (!catalog || !canSteer) return;
+  return collaboration.runAction(async () => {
     const url = new URL(location.href);
-    url.searchParams.set('scope', scopeSelect.value);
-    if (value === 'design') url.searchParams.delete('condition');
-    else url.searchParams.set('condition', value);
-    history.pushState(null, '', url); await showScope();
+    if (scope && scope !== (floorFocus?.focusedId ? 'level/' + floorFocus.focusedId : scopeSelect.value)) {
+      url.searchParams.set('scope', scope);
+      url.searchParams.delete('floor');
+    } else {
+      url.searchParams.set('scope', scopeFromUrl(url.searchParams));
+    }
+    const galleryOpen = Boolean(previewPreference());
+    writeRenovationView(url.searchParams, next);
+    url.searchParams.delete('history');
+    url.searchParams.delete('historyScope');
+    url.searchParams.delete('previews');
+    history.pushState(null, '', url);
+    if (galleryOpen) gallery.restore(null);
+    await showScope();
   });
+}
+
+showBefore.addEventListener('click', async () => {
+  document.querySelector('#display').open = false;
+  await changeReview({ compare: 'before' });
+  if (!backToDesign.hidden) backToDesign.focus();
+});
+showRemovals.addEventListener('change', () => {
+  document.querySelector('#display').open = false;
+  document.querySelector('#display > summary').focus();
+  void changeReview(showRemovals.checked ? { compare: 'removals' } : {});
+});
+openDrawings.addEventListener('click', async () => {
+  await changeReview({ drawing: 'proposed' });
+  if (!phaseLabel.hidden) drawingPhase.focus();
+});
+drawingPhase.addEventListener('change', () => changeReview({ drawing: drawingPhase.value }));
+backToDesign.addEventListener('click', async () => {
+  const fromDrawings = Boolean(renovation.drawing);
+  await changeReview({});
+  if (fromDrawings && !openDrawings.hidden) openDrawings.focus();
+  else scopeSelect.focus();
+});
+document.addEventListener('turnkey:before-renovation', event => {
+  if (!catalog || !canSteer) return;
+  const scope = event.detail?.scope;
+  if (scope && !catalog.scopes.some(entry => entry.id === scope)) return;
+  event.preventDefault();
+  void changeReview({ compare: 'before' }, scope);
 });
 showNotes.addEventListener('change', applyNotesVisibility);
 viewSelect.addEventListener('change', () => {
@@ -684,7 +780,7 @@ viewSelect.addEventListener('change', () => {
 assemblySelect.addEventListener('change', () => {
   const value = assemblySelect.value;
   collaboration.runAction(async () => {
-    const url = new URL(location.href); url.searchParams.set('assembly', value);
+    const url = new URL(location.href); url.searchParams.set(renovation.drawing ? 'sheetLayout' : 'assembly', value);
     history.pushState(null, '', url); await showScope();
   });
 });
@@ -713,8 +809,11 @@ collaboration = setupCollaboration({
   stunUrl: project.stunUrl?.(location.hostname),
   getView() {
     const params = new URL(location.href).searchParams;
-    return { scope: scopeFromUrl(params), floor: floorFocus?.focusedId ?? null, option: params.get('option'),
-      view: viewSelect.value, assembly: assemblySelect.value, condition: conditionSelect.value,
+    return { scope: scopeFromUrl(params), floor: renovation.drawing ? params.get('floor') : floorFocus?.focusedId ?? null,
+      option: params.get('option'),
+      view: viewSelect.value, assembly: assemblySelect.value, condition: renovation.condition,
+      modelView: params.get('view') === 'plan' ? 'plan' : 'perspective', modelAssembly: params.get('assembly') ?? 'stacked',
+      drawing: renovation.drawing, compare: renovation.compare,
       cutaway: wallCutaway.checked, position: camera.position.toArray(), target: controls?.target.toArray(),
       zoom: camera.zoom, planHeight: planCamera.top - planCamera.bottom };
   },
@@ -724,15 +823,22 @@ collaboration = setupCollaboration({
     try {
       const url = new URL(location.href);
       url.searchParams.set('scope', view.scope);
-      if (view.scope === 'house' && view.view !== 'plan' && typeof view.floor === 'string') url.searchParams.set('floor', view.floor);
+      if (view.scope === 'house' && (view.view !== 'plan' || view.drawing) && typeof view.floor === 'string') url.searchParams.set('floor', view.floor);
       else url.searchParams.delete('floor');
       if (view.option == null) url.searchParams.delete('option'); else url.searchParams.set('option', view.option);
-      for (const key of ['view', 'assembly', 'condition']) if (typeof view[key] === 'string') url.searchParams.set(key, view[key]);
       const isAsset = view.scope.startsWith('asset/');
-      if (isAsset) url.searchParams.delete('condition');
+      for (const key of ['view', 'assembly']) if (typeof view[key] === 'string') url.searchParams.set(key, view[key]);
+      if (view.modelView && view.drawing) url.searchParams.set('view', view.modelView);
+      const legacy = new URLSearchParams({ view: view.view, condition: view.condition });
+      const next = 'drawing' in view || 'compare' in view ? view : renovationView(legacy, hasDrawings);
+      writeRenovationView(url.searchParams, isAsset ? {} : next);
+      if (!isAsset && next.drawing) {
+        url.searchParams.set('sheetLayout', view.assembly === 'stacked' ? 'stacked' : 'compare');
+        url.searchParams.set('assembly', view.modelAssembly === 'compare' ? 'compare' : 'stacked');
+      }
       if (view.cutaway === false) url.searchParams.set('cutaway', 'off'); else url.searchParams.delete('cutaway');
       const previous = new URL(location.href);
-      const sameDesign = ['scope', 'floor', 'option', 'view', 'assembly', 'condition', 'cutaway'].every(key => previous.searchParams.get(key) === url.searchParams.get(key));
+      const sameDesign = ['scope', 'floor', 'option', 'view', 'assembly', 'condition', 'drawings', 'compare', 'sheetLayout', 'cutaway'].every(key => previous.searchParams.get(key) === url.searchParams.get(key));
       if (!sameDesign) {
         remoteCamera.clear();
         history.replaceState(null, '', url);
@@ -741,7 +847,7 @@ collaboration = setupCollaboration({
       else {
         scopeSelect.value = view.scope;
         if (view.option != null) optionSelect.value = view.option;
-        viewSelect.value = view.view; assemblySelect.value = view.assembly; conditionSelect.value = isAsset ? 'design' : view.condition;
+        viewSelect.value = view.view; assemblySelect.value = view.assembly;
         wallCutaway.checked = view.cutaway !== false;
       }
       if (!isCurrent()) return;
@@ -761,12 +867,12 @@ collaboration = setupCollaboration({
     if (!enabled) floorPicker?.clear();
     updateFloorNavigation();
     if (controls) controls.enabled = enabled;
-    for (const element of [scopeSelect, optionSelect, viewSelect, assemblySelect, conditionSelect, wallCutaway, fitButton]) element.disabled = !enabled;
+    updateReviewControls(scopeSelect.value?.startsWith('asset/'));
+    for (const element of [scopeSelect, optionSelect, viewSelect, assemblySelect, wallCutaway, fitButton]) element.disabled = !enabled;
     if (enabled && model) {
       fitButton.disabled = false;
       wallCutaway.disabled = viewSelect.value === 'plan';
-      viewSelect.disabled = false;
-      conditionSelect.disabled = scopeSelect.value.startsWith('asset/');
+      viewSelect.disabled = Boolean(renovation.drawing);
     }
   },
   getCursorSpace() { return floorFocus?.focusedId ? modelKey + '/' + floorFocus.focusedId : modelKey; },
@@ -795,6 +901,7 @@ try {
   catalog = await loadCatalog();
   gallery.setLibrary(catalog.allPreviews());
   const floors = catalog.scopes.filter(({ id }) => id.startsWith('level/'));
+  hasMultipleLevels = floors.length > 1;
   defaultPlanScope = floors.find(({ id }) => id === project.defaultPlanScope)?.id ?? floors[0]?.id ?? 'house';
   const menu = [];
   const groups = new Map();

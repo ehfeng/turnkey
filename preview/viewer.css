@@ -520,3 +520,25 @@ footer a { color: inherit; text-underline-offset: .2em; }
 @media (max-width: 580px) {
   #navigation { width: 100%; margin-left: 0; }
 }
+
+#open-drawings, #back-to-design { color: #294a37; background: #fff; }
+#drawing-phase-label select { min-width: 9rem; }
+
+#model-settings:not(:has(.toolbar-field:not([hidden]))) { display: none; }
+
+.camera-tools {
+  max-width: calc(100% - 5.25rem - env(safe-area-inset-left) - env(safe-area-inset-right));
+  flex-wrap: wrap;
+}
+.camera-layout { display: inline-flex; align-items: center; gap: .35rem; min-width: 0; }
+.camera-layout span { padding-left: .3rem; font-size: .78rem; }
+.camera-layout select { max-width: 100%; }
+@media (max-width: 580px) {
+  .camera-layout span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+}
