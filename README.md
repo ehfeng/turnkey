@@ -22,9 +22,11 @@ The viewer discovers model entries and schedules under the selected root. A proj
 
 ### Design history
 
-Set `designHistoryUrl` on the default export of `project/viewer.mjs` to show **Design history** in the toolbar. A link ending in `?history=on` opens the panel directly. The viewer requests the JSON feed the first time the panel opens. Supply `entries` in display order, newest first.
+Set `designHistoryUrl` on the default export of `project/viewer.mjs` to show **Design history** in the toolbar. The panel opens from `?history=on` and fetches its JSON feed on first use. A room opens on its own history. The area menu shows other rooms and **All house changes**. A link with `historyScope=room/kitchen` or `historyScope=all` sets the filter independently of the viewer scope. Projects without a feed have no history control.
 
-Each entry has a `title`, `branch`, `revision` (branch tip) and `status` (`open`, `merged` or `current`). Include the actual `baseRevision` and, for a completed merge, its `mergedRevision`. The graph shows each known revision. When the starting revision matches a recorded design, its title links to that entry. A `date` in ISO format and a human-readable `scope` identify when and where the change was made. An optional same-origin `thumbnail` illustrates the change. An entry’s `links` can include `preview` for an interactive model, `image` for a saved image, and `review` for its pull request or commit. Use verified URLs for that entry. Projects without a feed have no Design history control.
+Supply an `entries` array. Each entry needs a `title`, Git `revision` and `status` (`merged` for changes on main, `open` or `current` for branch proposals). Use an ISO `date` for chronological ordering. List each affected area in `changes` with its viewer `scope`, readable `label` and `summary` of what changed there. A change affecting two rooms appears under either filter. Older records may supply a single `scope` and use their `title` as the description.
+
+Revision details accept `integration` (`direct`, `squash`, or `merge`) and `parentRevision` (previous main revision). When the branch is known, include its `branch`, `baseRevision`, tip `revision` and, if merged, `mergedRevision`. A matching starting revision links to the recorded design. An optional same-origin `thumbnail` illustrates the change. An entry’s `links` can include `preview` for an interactive model, `image` for a saved image, and `review` for its pull request or commit. Use verified URLs for that entry.
 
 ## Ship a release
 

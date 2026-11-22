@@ -18,13 +18,16 @@ function shortRevision(revision) {
   return revision.slice(0, 7);
 }
 
-function revisionGraph(entry, baseHeading) {
+function revisionGraph(entry, baseDesign, goTo) {
   const points = [];
-  if (entry.baseRevision && (baseHeading || entry.baseRevision !== entry.revision)) {
-    points.push(['Started from', entry.baseRevision, 'base']);
+  const recordedBranch = entry.status !== 'merged' ||
+    (entry.branch && entry.branch !== 'main' && !['direct', 'squash'].includes(entry.integration));
+  const start = recordedBranch ? entry.baseRevision : entry.parentRevision;
+  if (start && start !== entry.revision) {
+    points.push([recordedBranch ? 'Started from' : 'Previous main', start, 'base']);
   }
-  points.push(['Branch revision', entry.revision, 'tip']);
-  if (entry.status === 'merged' && entry.mergedRevision) {
+  points.push([recordedBranch ? 'Branch revision' : 'Main revision', recordedBranch ? entry.revision : (entry.mergedRevision || entry.revision), recordedBranch ? 'tip' : 'main']);
+  if (recordedBranch && entry.status === 'merged' && entry.mergedRevision && entry.mergedRevision !== entry.revision) {
     points.push(['Merged as', entry.mergedRevision, 'merge']);
   }
 
@@ -58,7 +61,7 @@ function revisionGraph(entry, baseHeading) {
     const start = positions[i - 1];
     const end = positions[i];
     const middle = (start.x + end.x) / 2;
-    line(`M ${start.x} ${start.y} C ${middle} ${start.y} ${middle} ${end.y} ${end.x} ${end.y}`, 'proposal-line');
+    line(`M ${start.x} ${start.y} C ${middle} ${start.y} ${middle} ${end.y} ${end.x} ${end.y}`, recordedBranch ? 'proposal-line' : 'house-line');
   }
   points.forEach(([label, revision, role], i) => {
     const dot = element('span', `history-dot ${role}`);
@@ -69,13 +72,12 @@ function revisionGraph(entry, baseHeading) {
     const commit = element('code', '', shortRevision(revision));
     commit.title = revision;
     point.append(element('span', '', label), commit);
-    if (role === 'base' && baseHeading) {
-      const link = element('a', 'history-source', baseHeading.textContent);
-      link.href = `#${baseHeading.id}`;
+    if (role === 'base' && baseDesign) {
+      const link = element('a', 'history-source', baseDesign.title);
+      link.href = `#${baseDesign.anchor}`;
       link.addEventListener('click', event => {
         event.preventDefault();
-        baseHeading.focus({ preventScroll: true });
-        baseHeading.scrollIntoView({ block: 'center' });
+        goTo(baseDesign);
       });
       point.append(link);
     }
@@ -96,31 +98,59 @@ function linkTo(label, href) {
   } catch { return null; }
 }
 
-function renderEntry(entry, title, baseHeading) {
+function scopeLabel(scope) {
+  if (scope === 'house') return 'Whole house';
+  if (!scope) return 'Unspecified area';
+  const name = String(scope).split('/').at(-1).replaceAll('-', ' ');
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+function prepareEntries(entries) {
+  const revisions = new Map();
+  const designs = entries.map((entry, index) => {
+    const changes = entry.changes?.length ? entry.changes : [
+      { scope: entry.scope ?? '', label: scopeLabel(entry.scope), summary: entry.title },
+    ];
+    const design = { ...entry, changes, anchor: `history-entry-${index + 1}` };
+    for (const revision of new Set([entry.revision, entry.mergedRevision])) {
+      if (!revision) continue;
+      if (!revisions.has(revision)) revisions.set(revision, []);
+      revisions.get(revision).push(design);
+    }
+    return design;
+  });
+  for (const design of designs) {
+    const parents = (revisions.get(design.baseRevision || design.parentRevision) ?? []).filter(other => other !== design);
+    if (parents.length === 1) design.baseDesign = parents[0];
+  }
+  return designs.sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0));
+}
+
+const integrationLabels = {
+  direct: 'Direct commit to main',
+  squash: 'Squash commit on main',
+  merge: 'Merge commit on main',
+};
+
+function renderEntry(entry, changes, goTo) {
   const item = element('li', 'history-entry');
   item.dataset.status = entry.status;
-  const meta = element('div', 'history-meta');
-  meta.append(element('span', 'history-state', states[entry.status]));
-  if (entry.date && Number.isFinite(Date.parse(entry.date))) {
-    const date = element('time', '', dateFormat.format(new Date(entry.date)));
-    date.dateTime = entry.date;
-    meta.append(date);
-  }
-  const info = element('p', 'history-branch');
-  info.append(element('code', '', entry.branch));
-  if (entry.scope) info.append(document.createTextNode(` · ${entry.scope}`));
-  const actions = element('div', 'history-links');
-  const preview = linkTo('Open preview', entry.links?.preview);
-  const review = linkTo('Review changes', entry.links?.review);
-  const image = linkTo('View image', entry.links?.image);
-  if (preview) actions.append(preview);
-  if (image) actions.append(image);
-  if (!preview && !image) actions.append(element('span', '', 'No saved preview'));
-  if (review) actions.append(review);
   const summary = element('div', 'history-summary');
-  const heading = element('div');
-  heading.append(title, info);
-  summary.append(heading);
+  const text = element('div', 'history-changes');
+  const title = entry.title.trim();
+  const hasHeadline = title && !/^(?:merge (?:branch|pull request|remote-tracking branch)\b|fixup!|squash!|wip$)/i.test(title) &&
+    !changes.some(change => change.summary.trim().toLowerCase() === title.toLowerCase());
+  changes.forEach((change, index) => {
+    const heading = element('h4', '', change.label);
+    if (index === 0) {
+      heading.id = entry.anchor;
+      heading.tabIndex = -1;
+    }
+    text.append(heading);
+    if (index === 0 && hasHeadline) text.append(element('p', 'history-headline', title));
+    text.append(element('p', 'history-description', change.summary));
+  });
+  summary.append(text);
   const thumbnailUrl = linkTo('', entry.thumbnail)?.href;
   if (thumbnailUrl && new URL(thumbnailUrl).origin === location.origin) {
     const thumbnail = element('img', 'history-thumbnail');
@@ -131,27 +161,41 @@ function renderEntry(entry, title, baseHeading) {
     thumbnail.addEventListener('error', () => thumbnail.remove(), { once: true });
     summary.append(thumbnail);
   }
-  item.append(meta, summary, revisionGraph(entry, baseHeading), actions);
+  const meta = element('div', 'history-meta');
+  if (entry.date && Number.isFinite(Date.parse(entry.date))) {
+    const date = element('time', '', dateFormat.format(new Date(entry.date)));
+    date.dateTime = entry.date;
+    meta.append(date);
+  }
+  if (entry.status !== 'merged') meta.append(element('span', 'history-state', states[entry.status]));
+  const preview = linkTo('Open preview', entry.links?.preview);
+  const image = linkTo('View image', entry.links?.image);
+  if (preview) meta.append(preview);
+  if (image) meta.append(image);
+
+  const detail = element('details', 'history-detail');
+  detail.append(element('summary', '', 'Revision details'));
+  const git = element('div', 'history-detail-body');
+  const integration = integrationLabels[entry.integration] ?? states[entry.status];
+  git.append(element('strong', 'history-commit-title', entry.title), element('span', '', integration));
+  if (entry.branch) git.append(element('code', 'history-branch', entry.branch));
+  git.append(revisionGraph(entry, entry.baseDesign, goTo));
+  const review = linkTo('Review changes', entry.links?.review);
+  if (review) git.append(review);
+  if (!preview && !image) git.append(element('span', '', 'No saved preview'));
+  detail.append(git);
+  item.append(summary, meta, detail);
   return item;
 }
 
-function renderEntries(entries) {
-  const sources = new Map();
-  const titles = entries.map((entry, index) => {
-    const title = element('h3', '', entry.title);
-    title.id = `history-entry-${index + 1}`;
-    title.tabIndex = -1;
-    for (const revision of new Set([entry.revision, entry.mergedRevision])) {
-      if (!revision) continue;
-      if (!sources.has(revision)) sources.set(revision, []);
-      sources.get(revision).push(title);
-    }
-    return title;
-  });
-  return entries.map((entry, index) => {
-    const parents = (sources.get(entry.baseRevision) ?? []).filter(title => title !== titles[index]);
-    return renderEntry(entry, titles[index], parents.length === 1 ? parents[0] : null);
-  });
+function isValidEntry(entry) {
+  return entry && Object.hasOwn(states, entry.status) &&
+    typeof entry.title === 'string' && typeof entry.revision === 'string' &&
+    [entry.branch, entry.scope, entry.baseRevision, entry.parentRevision, entry.mergedRevision]
+      .every(value => value == null || typeof value === 'string') &&
+    (!entry.changes || (Array.isArray(entry.changes) && entry.changes.every(change =>
+      change && typeof change.scope === 'string' && typeof change.label === 'string' &&
+      typeof change.summary === 'string')));
 }
 
 export function enableDesignHistory(source) {
@@ -160,19 +204,79 @@ export function enableDesignHistory(source) {
   const close = document.querySelector('#close-history');
   const retry = document.querySelector('#retry-history');
   const status = document.querySelector('#history-status');
-  const list = document.querySelector('#history-entries');
+  const filter = document.querySelector('#history-filter');
+  const area = document.querySelector('#history-area');
+  const main = document.querySelector('#history-main');
+  const proposals = document.querySelector('#history-proposals');
+  const mainList = document.querySelector('#history-entries');
+  const branchList = document.querySelector('#history-branch-entries');
   let loading = false;
-  let loaded = false;
+  let designs;
 
-  function updateUrl(open) {
+  function updateUrl(open, areaId) {
     const url = new URL(location.href);
     if (open) url.searchParams.set('history', 'on');
     else url.searchParams.delete('history');
+    if (areaId) url.searchParams.set('historyScope', areaId);
+    else if (!open) url.searchParams.delete('historyScope');
     history.replaceState(history.state, '', url);
   }
 
+  function goTo(design) {
+    let heading = document.getElementById(design.anchor);
+    if (!heading) {
+      area.value = 'all';
+      updateUrl(true, area.value);
+      render();
+      heading = document.getElementById(design.anchor);
+    }
+    heading.focus({ preventScroll: true });
+    heading.scrollIntoView({ block: 'center' });
+  }
+
+  function render() {
+    const house = [];
+    const branches = [];
+    for (const design of designs) {
+      const changes = area.value === 'all' ? design.changes :
+        design.changes.filter(change => change.scope === area.value);
+      if (!changes.length) continue;
+      (design.status === 'merged' ? house : branches).push(renderEntry(design, changes, goTo));
+    }
+    mainList.replaceChildren(...house);
+    branchList.replaceChildren(...branches);
+    main.hidden = !house.length;
+    proposals.hidden = !branches.length;
+    const count = house.length + branches.length;
+    status.textContent = count ? '' : area.value === 'all'
+      ? 'No design changes have been recorded yet.'
+      : `No recorded changes for ${area.selectedOptions[0].textContent}.`;
+    dialog.querySelector('.history-body').scrollTop = 0;
+  }
+
+  function setArea() {
+    const params = new URL(location.href).searchParams;
+    const scope = params.get('scope') || document.querySelector('#scope')?.value || '';
+    const options = new Map();
+    for (const design of designs) {
+      for (const change of design.changes) {
+        if (change.scope) options.set(change.scope, change.label);
+      }
+    }
+    if (scope.startsWith('room/') && !options.has(scope)) options.set(scope, scopeLabel(scope));
+    const selected = params.get('historyScope') ?? (scope.startsWith('room/') ? scope : 'all');
+    area.replaceChildren(new Option('All house changes', 'all'));
+    for (const [id, label] of [...options].sort((a, b) => a[1].localeCompare(b[1]))) {
+      area.add(new Option(label, id));
+    }
+    area.value = options.has(selected) ? selected : 'all';
+    filter.hidden = !options.size;
+    render();
+  }
+
   async function load() {
-    if (loading || loaded) return;
+    if (designs) { setArea(); return; }
+    if (loading) return;
     loading = true;
     retry.hidden = true;
     status.textContent = 'Loading design history…';
@@ -180,16 +284,9 @@ export function enableDesignHistory(source) {
       const response = await fetch(source);
       if (!response.ok) throw new Error('History request failed');
       const { entries } = await response.json();
-      if (!Array.isArray(entries) || !entries.every(entry => entry &&
-        Object.hasOwn(states, entry.status) && typeof entry.title === 'string' &&
-        typeof entry.revision === 'string' && typeof entry.branch === 'string' &&
-        (!entry.baseRevision || typeof entry.baseRevision === 'string') &&
-        (!entry.mergedRevision || typeof entry.mergedRevision === 'string'))) {
-        throw new Error('Invalid history entries');
-      }
-      list.replaceChildren(...renderEntries(entries));
-      status.textContent = entries.length ? '' : 'No design changes have been recorded yet.';
-      loaded = true;
+      if (!Array.isArray(entries) || !entries.every(isValidEntry)) throw new Error('Invalid history entries');
+      designs = prepareEntries(entries);
+      setArea();
     } catch {
       status.textContent = 'Design history could not be loaded.';
       retry.hidden = false;
@@ -218,6 +315,10 @@ export function enableDesignHistory(source) {
     dismiss();
   });
   retry.addEventListener('click', load);
+  area.addEventListener('change', () => {
+    updateUrl(true, area.value);
+    render();
+  });
   window.addEventListener('popstate', () => {
     if (new URL(location.href).searchParams.get('history') === 'on') open();
     else if (dialog.open) dismiss();

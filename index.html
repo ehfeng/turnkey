@@ -64,10 +64,20 @@
         <h2 id="history-title">Design history</h2>
         <button id="close-history" type="button" autofocus>Close</button>
       </div>
+      <label id="history-filter" for="history-area" hidden>Room or area
+        <select id="history-area"></select>
+      </label>
       <div class="history-body">
         <p id="history-status" role="status"></p>
         <button id="retry-history" type="button" hidden>Try again</button>
-        <ol id="history-entries" aria-label="Design changes"></ol>
+        <section id="history-main" aria-labelledby="history-main-heading" hidden>
+          <h3 id="history-main-heading" class="history-section-title">Changes on main</h3>
+          <ol id="history-entries" class="history-list" aria-label="Changes on main"></ol>
+        </section>
+        <section id="history-proposals" aria-labelledby="history-proposals-heading" hidden>
+          <h3 id="history-proposals-heading" class="history-section-title">Branch proposals</h3>
+          <ol id="history-branch-entries" class="history-list" aria-label="Branch proposals"></ol>
+        </section>
       </div>
     </dialog>
     <main id="viewport" aria-label="Design viewport">
