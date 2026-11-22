@@ -105,6 +105,16 @@ function scopeLabel(scope) {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+function existingScope(historyArea) {
+  const params = new URL(location.href).searchParams;
+  const viewerScope = params.get('scope') || 'house';
+  const scope = historyArea && historyArea !== 'all' ? historyArea :
+    viewerScope === 'house' && params.get('floor') ? 'level/' + params.get('floor') : viewerScope;
+  const [kind, id] = scope.split('/');
+  if (kind === 'wall' && id) return 'room/' + id;
+  return (kind === 'room' || kind === 'level') && id ? kind + '/' + id : 'house';
+}
+
 function prepareEntries(entries) {
   const revisions = new Map();
   const designs = entries.map((entry, index) => {
@@ -168,10 +178,23 @@ function renderEntry(entry, changes, goTo) {
     meta.append(date);
   }
   if (entry.status !== 'merged') meta.append(element('span', 'history-state', states[entry.status]));
+  // Only the project's explicit model URL identifies a deployed revision.
+  // An archived gallery, photograph or Git comparison has its own destination.
+  const scopedDesign = changes.length === 1 && entry.links?.designByScope?.[changes[0].scope];
+  const designLink = linkTo('View design', scopedDesign || entry.links?.design);
+  if (designLink) {
+    const url = new URL(designLink.href);
+    for (const key of ['condition', 'compare', 'drawings', 'previews']) url.searchParams.delete(key);
+    designLink.href = url.href;
+    meta.append(designLink);
+  }
   const preview = linkTo('Open preview', entry.links?.preview);
   const image = linkTo('View image', entry.links?.image);
-  if (preview) meta.append(preview);
+  if (preview && preview.href !== designLink?.href) meta.append(preview);
   if (image) meta.append(image);
+  const review = linkTo('Review changes', entry.links?.review);
+  const hasSavedView = Boolean(designLink || preview || image);
+  if (review && !hasSavedView) meta.append(review);
 
   const detail = element('details', 'history-detail');
   detail.append(element('summary', '', 'Revision details'));
@@ -180,9 +203,7 @@ function renderEntry(entry, changes, goTo) {
   git.append(element('strong', 'history-commit-title', entry.title), element('span', '', integration));
   if (entry.branch) git.append(element('code', 'history-branch', entry.branch));
   git.append(revisionGraph(entry, entry.baseDesign, goTo));
-  const review = linkTo('Review changes', entry.links?.review);
-  if (review) git.append(review);
-  if (!preview && !image) git.append(element('span', '', 'No saved preview'));
+  if (review && hasSavedView) git.append(review);
   detail.append(git);
   item.append(summary, meta, detail);
   return item;
@@ -213,6 +234,36 @@ export function enableDesignHistory(source) {
   let loading = false;
   let designs;
 
+  // The baseline describes the physical house before the work. It lives
+  // outside the revision list so it remains available when that list is empty.
+  const baseline = element('section', 'history-baseline');
+  const heading = element('h3', '', 'Before renovation');
+  heading.id = 'history-before-heading';
+  baseline.setAttribute('aria-labelledby', heading.id);
+  const description = element('p');
+  const before = element('a', '', 'View before renovation');
+  baseline.append(heading, description, before);
+  dialog.querySelector('.history-body').prepend(baseline);
+
+  function updateBaseline(areaId) {
+    const scope = existingScope(areaId);
+    const url = new URL(location.pathname, location.origin);
+    url.searchParams.set('scope', scope);
+    url.searchParams.set('compare', 'before');
+    before.href = url.href;
+    description.textContent = scopeLabel(scope) + ' as reconstructed from project records.';
+  }
+
+  before.addEventListener('click', event => {
+    if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const scope = new URL(before.href).searchParams.get('scope');
+    const navigation = new CustomEvent('turnkey:before-renovation', { cancelable: true, detail: { scope } });
+    if (document.dispatchEvent(navigation)) return;
+    event.preventDefault();
+    dialog.close();
+    trigger.focus();
+  });
+
   function updateUrl(open, areaId) {
     const url = new URL(location.href);
     if (open) url.searchParams.set('history', 'on');
@@ -235,6 +286,7 @@ export function enableDesignHistory(source) {
   }
 
   function render() {
+    updateBaseline(area.value);
     const house = [];
     const branches = [];
     for (const design of designs) {
@@ -256,7 +308,8 @@ export function enableDesignHistory(source) {
 
   function setArea() {
     const params = new URL(location.href).searchParams;
-    const scope = params.get('scope') || document.querySelector('#scope')?.value || '';
+    const [kind, roomId] = (params.get('scope') ?? '').split('/');
+    const scope = (kind === 'room' || kind === 'wall') && roomId ? 'room/' + roomId : '';
     const options = new Map();
     for (const design of designs) {
       for (const change of design.changes) {
@@ -296,6 +349,7 @@ export function enableDesignHistory(source) {
   }
 
   function open() {
+    updateBaseline(new URL(location.href).searchParams.get('historyScope'));
     if (!dialog.open) dialog.showModal();
     updateUrl(true);
     void load();

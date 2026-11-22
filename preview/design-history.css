@@ -33,6 +33,10 @@
   color: #314d3a;
 }
 .history-body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 1.35rem; }
+.history-baseline { margin: 1rem 0 .1rem; padding: .85rem 1rem; border: 1px solid #c9d5c9; border-radius: .35rem; background: #f1f5ee; }
+.history-baseline h3 { margin: 0; font: 500 1.4rem/1.2 "Instrument Serif", Georgia, serif; }
+.history-baseline p { margin: .25rem 0 .45rem; font-size: .88rem; line-height: 1.4; }
+.history-baseline a { color: #225b43; text-underline-offset: .17em; font-size: .88rem; font-weight: 600; }
 #history-status { font-size: .9rem; }
 #history-status:empty { margin: 0; }
 #retry-history { margin: 0 0 1rem; }

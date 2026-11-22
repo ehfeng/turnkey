@@ -22,6 +22,10 @@ The viewer discovers model entries and schedules under the selected root. A proj
 
 ### Design history
 
+The viewer opens a revision in its Design model. **Before renovation** in history opens the original condition of the selected space. **Display → Show planned removals** highlights the recorded removals in the model. **Back to design** restores the selected room option. For projects with drawing builders, **Construction drawings** opens Existing, Demolition or Proposed plans. The lower-left viewport controls hold the floor layout alongside the view and camera controls. Whole-house drawings start side by side.
+
+Link to a model comparison with `?compare=before` or `?compare=removals`. Use `?drawings=existing`, `?drawings=demolition` or `?drawings=proposed` for a sheet. Existing `condition` links still open their corresponding model or drawing. For a historical model, an entry can provide an exact-revision `links.design` URL in addition to the original gallery, image and review links.
+
 Set `designHistoryUrl` on the default export of `project/viewer.mjs` to show **Design history** in the toolbar. The panel opens from `?history=on` and fetches its JSON feed on first use. A room opens on its own history. The area menu shows other rooms and **All house changes**. A link with `historyScope=room/kitchen` or `historyScope=all` sets the filter independently of the viewer scope. Projects without a feed have no history control.
 
 Supply an `entries` array. Each entry needs a `title`, Git `revision` and `status` (`merged` for changes on main, `open` or `current` for branch proposals). Use an ISO `date` for chronological ordering. List each affected area in `changes` with its viewer `scope`, readable `label` and `summary` of what changed there. A change affecting two rooms appears under either filter. Older records may supply a single `scope` and use their `title` as the description.

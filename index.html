@@ -27,23 +27,24 @@
             <label class="toolbar-field" for="option" id="option-label" hidden>Option
               <select id="option" hidden></select>
             </label>
-            <label class="toolbar-field" for="condition">Condition
-              <select id="condition"><option value="design">Design model</option><option value="existing">Existing · before renovation</option><option value="demolition">Demolition · planned removals</option><option value="proposed">Proposed · finished layout</option></select>
-            </label>
-            <label class="toolbar-field" for="assembly" id="assembly-label" hidden>Layout
-              <select id="assembly" hidden><option value="stacked">Stacked</option><option value="compare">Compare floors</option></select>
-            </label>
           </div>
         </details>
         <details id="display" class="menu">
           <summary>Display</summary>
           <div class="display-fields">
+            <button id="show-before" type="button" hidden>Before renovation</button>
+            <label id="removals-label" class="check"><input id="show-removals" type="checkbox"> Show planned removals</label>
             <label class="check"><input id="wall-cutaway" type="checkbox" checked> Wall cutaway</label>
             <label class="check"><input id="fixture-lights" type="checkbox" checked> Fixture lights</label>
             <label class="check"><input id="show-notes" type="checkbox" aria-controls="warnings"> <span>Notes (<span id="note-count">0</span>)</span></label>
             <label class="check" id="preview-control"><input id="show-previews" type="checkbox" aria-controls="preview-gallery" disabled> Previews <span id="preview-count"></span></label>
           </div>
         </details>
+        <button id="open-drawings" type="button" hidden>Construction drawings</button>
+        <label id="drawing-phase-label" class="toolbar-field" for="drawing-phase" hidden>Construction drawings
+          <select id="drawing-phase" aria-label="Drawing phase"><option value="existing">Existing</option><option value="demolition">Demolition</option><option value="proposed">Proposed</option></select>
+        </label>
+        <button id="back-to-design" type="button" hidden>Back to design</button>
         <button id="open-history" type="button" aria-haspopup="dialog" aria-controls="design-history" hidden>Design history</button>
         <button id="toggle-wall-references" type="button" aria-controls="wall-panel" aria-expanded="false" hidden>Wall references</button>
         <button id="place-furniture" type="button" hidden>Place furniture</button>
@@ -124,9 +125,13 @@
               <p id="notice-detail"></p>
             </div>
           </div>
-          <div class="camera-tools" role="group" aria-label="Camera controls">
+          <div class="camera-tools" role="group" aria-label="View controls">
             <label class="sr-only" for="view">View</label>
             <select id="view"><option value="perspective">3D</option><option value="plan">Plan</option></select>
+            <label id="assembly-label" class="camera-layout" for="assembly" hidden>
+              <span>Layout</span>
+              <select id="assembly" hidden><option value="stacked">Stacked</option><option value="compare">Compare floors</option></select>
+            </label>
             <button id="fit" type="button" disabled>Fit view</button>
           </div>
         </div>
