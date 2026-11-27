@@ -3,7 +3,8 @@ import { renovationView, writeRenovationView } from './renovation-views.mjs';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { furnitureEditor } from './furniture-editor.mjs';
-import { loadCatalog } from './designs.mjs';
+import { loadCatalog, selectDesignGeometry } from './active-geometry.mjs';
+import { openDesign } from './open-design.mjs';
 import { enableFloorPicking } from './floor-picking.mjs';
 import { createFloorFocus } from './floor-focus.mjs';
 import { createPreviewGallery } from './gallery.mjs';
@@ -123,7 +124,8 @@ function invalidate() {
   if (renderer && model) frames.request();
 }
 
-const editor = furnitureEditor({
+let editor, designSession, sharedDesignWritable = false, designBootstrapError;
+const editorOptions = {
   openRoom: (id, refresh) => collaboration.runAction(async () => {
     if (refresh) { modelKey = undefined; clearFloorCache(); }
     const url = new URL(location.href);
@@ -157,7 +159,12 @@ const editor = furnitureEditor({
     applyFixtureLights();
   },
   invalidate
-});
+};
+
+function getDesignHeaders() {
+  const key = document.getElementById('layout-key').value.trim();
+  return key ? { Authorization: 'Bearer ' + key } : {};
+}
 
 // Keep decoded images across scope/option changes; GPU textures remain model-owned and disposable.
 THREE.Cache.enabled = true;
@@ -805,7 +812,27 @@ document.addEventListener('fullscreenchange', syncFullscreenButton);
 syncFullscreenButton();
 // Shared view uses URL-backed design choices plus a camera pose in world metres.
 const raycaster = new THREE.Raycaster();
+try {
+  const saved = project.sharedDesigns && await openDesign(new URL(location.href).searchParams);
+  if (saved) {
+    const [{ createDesignSession }, { designEditor }] = await Promise.all([
+      import('./design-session.mjs'), import('./design-editor.mjs'),
+    ]);
+    sharedDesignWritable = saved.writable;
+    designSession = createDesignSession({ ...saved, getHeaders: getDesignHeaders });
+    await selectDesignGeometry(designSession.getState().snapshot.geometryRevision);
+    editor = designEditor({ ...editorOptions, session: designSession, writable: saved.writable,
+      authRequired: saved.authRequired, historical: saved.historical,
+      getHeaders: getDesignHeaders, onSnapshotChange: clearFloorCache });
+  } else {
+    editor = furnitureEditor(editorOptions);
+  }
+} catch (error) {
+  designBootstrapError = error;
+}
 collaboration = setupCollaboration({
+  getDesignSession: () => sharedDesignWritable && !new URL(location.href).searchParams.has('designVersion')
+    ? designSession : undefined,
   stunUrl: project.stunUrl?.(location.hostname),
   getView() {
     const params = new URL(location.href).searchParams;
@@ -898,6 +925,7 @@ window.addEventListener('popstate', () => {
 new ResizeObserver(resize).observe(viewport);
 
 try {
+  if (designBootstrapError) throw designBootstrapError;
   catalog = await loadCatalog();
   gallery.setLibrary(catalog.allPreviews());
   const floors = catalog.scopes.filter(({ id }) => id.startsWith('level/'));

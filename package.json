@@ -1,6 +1,6 @@
 {
   "name": "turnkey",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "description": "Local viewer and validation tools for versioned house projects",
   "type": "module",
@@ -16,7 +16,14 @@
     "./renderer-resources": "./lib/renderer-resources.mjs",
     "./collaboration-protocol": "./shared/collaboration-protocol.mjs",
     "./rooms": "./server/rooms.mjs",
-    "./vite": "./lib/project-config.mjs"
+    "./vite": "./lib/project-config.mjs",
+    "./design": "./shared/design.mjs",
+    "./design-store": "./server/design-store.mjs",
+    "./design-api": "./server/design-api.mjs",
+    "./design-plugin": "./server/design-plugin.mjs",
+    "./catalog": "./shared/catalog.mjs",
+    "./catalog-service": "./server/catalog.mjs",
+    "./catalog-local": "./server/catalog-local.mjs"
   },
   "files": [
     "bin",

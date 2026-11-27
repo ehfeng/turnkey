@@ -3,7 +3,7 @@ import { createCollaboration } from './collaboration-transport.mjs';
 import { cursorInSpace, cursorPosition } from './cursor-motion.mjs';
 
 // The invitation secret stays in the URL fragment, so it is not sent with page requests.
-export function setupCollaboration({ stunUrl, getView, applyView, setSteering, finishCameraMotion, getCursorSpace, getWorldCursor, projectWorld }) {
+export function setupCollaboration({ stunUrl, getView, applyView, setSteering, finishCameraMotion, getCursorSpace, getWorldCursor, projectWorld, getDesignSession }) {
   const panel = document.querySelector('#collaboration');
   const form = panel.querySelector('form');
   const name = panel.querySelector('#collab-name');
@@ -21,7 +21,36 @@ export function setupCollaboration({ stunUrl, getView, applyView, setSteering, f
   const stun = import.meta.env.VITE_COLLAB_STUN_URL ?? stunUrl;
   const iceServers = stun ? [{ urls: stun }] : [];
   const signalingUrl = new URL('/api/rooms/ws', server); signalingUrl.protocol = server.protocol === 'https:' ? 'wss:' : 'ws:';
+  const designLabel = document.createElement('label');
+  const editDesign = document.createElement('input');
+  editDesign.type = 'checkbox'; editDesign.id = 'collab-edit-design';
+  designLabel.append(editDesign, ' Edit furniture together');
+  designLabel.hidden = true;
+  form.insertBefore(designLabel, form.querySelector('button'));
+  const localDrafts = document.createElement('details');
+  localDrafts.hidden = true;
+  const recoveryTitle = document.createElement('summary'); recoveryTitle.textContent = 'Recover a local draft';
+  const recovered = document.createElement('select'); recovered.setAttribute('aria-label', 'Local draft');
+  const recover = document.createElement('button'); recover.type = 'button'; recover.textContent = 'Open a personal copy';
+  localDrafts.append(recoveryTitle, recovered, recover);
+  panel.querySelector('.collab-panel').append(localDrafts);
+  async function listLocalDrafts() {
+    design = await getDesignSession?.();
+    const drafts = design?.recoverableDrafts() ?? [];
+    localDrafts.hidden = liveDesign || !drafts.length;
+    recovered.replaceChildren(...drafts.map(draft => new Option(
+      (draft.shared ? 'Shared' : 'Personal') + ' · ' + draft.branch + ' · ' + draft.edits + ' edits · ' + new Date(draft.updatedAt).toLocaleString(), draft.source
+    )));
+  }
+  recover.onclick = () => {
+    try {
+      design.recoverAsPersonal(recovered.value);
+      status.textContent = 'Opened a personal recovery copy. You can save it on a new branch.';
+    } catch (error) { status.textContent = error.message; }
+  };
+  panel.addEventListener('toggle', () => { if (panel.open) listLocalDrafts().catch(() => {}); });
   const cursors = new Map();
+  let design, liveDesign;
   let cursorFrame = null;
   let lastCursorSent = -Infinity;
   let cursorTimer = null;
@@ -29,7 +58,24 @@ export function setupCollaboration({ stunUrl, getView, applyView, setSteering, f
   const fragment = new URLSearchParams(location.hash.slice(1));
   const incoming = fragment.has('room') && fragment.has('token')
     ? { room: fragment.get('room'), token: fragment.get('token') } : null;
-  panel.querySelector('#collab-submit').textContent = incoming ? 'Join review' : 'Start review';
+  if (incoming && fragment.has('sessionId')) incoming.design = {
+    projectId: fragment.get('projectId'), sessionId: fragment.get('sessionId'),
+    branch: fragment.get('branch'), head: fragment.get('head')
+  };
+  const submit = panel.querySelector('#collab-submit');
+  submit.textContent = incoming?.design ? 'Join shared design' : incoming ? 'Join review' : 'Start review';
+  editDesign.onchange = () => { submit.textContent = editDesign.checked ? 'Start shared design' : 'Start review'; };
+  function updateInvite(descriptor) {
+    if (!credentials) return;
+    const url = new URL(location.href);
+    const parts = new URLSearchParams({ room: credentials.room, token: credentials.token });
+    if (descriptor) {
+      url.searchParams.delete('designVersion');
+      url.searchParams.set('designBranch', descriptor.branch);
+      for (const key of ['projectId','sessionId','branch','head']) parts.set(key, descriptor[key] ?? '');
+    }
+    url.hash = parts.toString(); invite.value = url.href;
+  }
   if (incoming) panel.open = true;
 
   function reset() {
@@ -41,6 +87,8 @@ export function setupCollaboration({ stunUrl, getView, applyView, setSteering, f
     if (applyingView && lastAppliedView) void applyView(lastAppliedView, () => true);
     pendingView = undefined;
     connected = false; gesture = false; lastView = undefined; releasedEpoch = null; resolveWaiters(false);
+    if (liveDesign) design?.disconnect();
+    liveDesign = false;
     const old = session; session = undefined; old?.stop(); state = undefined; credentials = undefined;
     scene.classList.remove('remote-steering');
     cursors.clear(); layer.replaceChildren(); members.textContent = '';
@@ -48,10 +96,15 @@ export function setupCollaboration({ stunUrl, getView, applyView, setSteering, f
     form.hidden = false; invite.hidden = copy.hidden = leave.hidden = true;
     form.querySelector('button').disabled = false;
     setSteering(true);
+    listLocalDrafts().catch(() => {});
   }
   function displayState(next) {
     const previous = state;
     state = next;
+    if (liveDesign) {
+      design.membership(next);
+      if (next.design) updateInvite(next.design);
+    }
     if (!next.peerId) {
       connected = false;
       activePointers.clear(); gesture = false;
@@ -64,8 +117,9 @@ export function setupCollaboration({ stunUrl, getView, applyView, setSteering, f
     steering.textContent = next.peerId && holder ? holder.name + ' steering' : '';
     scene.classList.toggle('remote-steering', Boolean(next.peerId && next.lease && !mine));
     members.textContent = (peers ?? []).map(p => `${p.icon || '●'} ${p.name}${p.id === next.peerId ? ' (you)' : ''}`).join(' · ');
-    if (next.peerId) status.textContent = mine ? 'You are steering the shared view.' : holder ? `${holder.name} is steering the shared view.` : 'View is free. Drag or use the controls to steer.';
-    setSteering(Boolean(next.peerId) && (!next.lease || mine));
+    if (liveDesign && next.peerId) status.textContent = 'Editing the shared furniture draft.';
+    else if (next.peerId) status.textContent = mine ? 'You are steering the shared view.' : holder ? `${holder.name} is steering the shared view.` : 'View is free. Drag or use the controls to steer.';
+    setSteering(liveDesign || Boolean(next.peerId) && (!next.lease || mine));
     if (mine && previous?.lease?.epoch !== next.lease.epoch) finishCameraMotion();
     if (mine && next.lease.epoch !== releasedEpoch) { releasedEpoch = null; resolveWaiters(true); }
     else if ((next.lease && !mine) || !next.peerId) resolveWaiters(false);
@@ -125,13 +179,26 @@ export function setupCollaboration({ stunUrl, getView, applyView, setSteering, f
     status.textContent = 'Connecting…';
     try {
       credentials = incoming;
+      design = await getDesignSession?.();
+      if (incoming?.design && !design) throw new Error('The project design must be available to join this session.');
+      liveDesign = Boolean(incoming?.design || (!incoming && design && editDesign.checked));
+      const draft = liveDesign ? design.getState() : null;
+      if (liveDesign && draft.projectId !== (incoming?.design?.projectId ?? draft.projectId)) throw new Error('Open the project identified by the invitation.');
       if (!credentials) {
-        const response = await fetch(new URL('/api/rooms', server), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ view: getView(), protocolVersion: COLLABORATION_PROTOCOL_VERSION, revision: __VIEWER_REVISION__ }) });
+        const headers = liveDesign ? design.getHeaders() : new Headers();
+        headers.set('Content-Type', 'application/json');
+        const response = await fetch(new URL('/api/rooms', server), { method: 'POST', headers, body: JSON.stringify({
+          view: getView(), protocolVersion: COLLABORATION_PROTOCOL_VERSION, revision: __VIEWER_REVISION__,
+          ...(liveDesign ? { design: { projectId: draft.projectId, branch: draft.branch, head: draft.head } } : {})
+        }) });
+        if (liveDesign && response.status === 401) throw new Error('Enter the owner editing key to start a shared design.');
         if (!response.ok) throw new Error(`Could not start a review (${response.status}).`);
         credentials = await response.json();
       }
+      if (liveDesign && !credentials.design) throw new Error('This collaboration service needs a design-enabled room.');
       session = createCollaboration({ ...credentials, revision: __VIEWER_REVISION__, name: displayName, icon: icon.value, signalingUrl: signalingUrl.href, iceServers,
-        onState: displayState, onSnapshot: receiveView,
+        onState: displayState, onSnapshot: (view, from) => { if (!liveDesign) return receiveView(view, from); },
+        onDesign: (data, from) => design?.receive(data, from), onPreview: (instance, from) => design?.receivePreview(instance, from),
         onCursor: displayCursor, onStatus: result => {
           if (result.status === 'connected') {
             connected = true; lastView ??= getView(); form.hidden = true; invite.hidden = copy.hidden = leave.hidden = false;
@@ -142,10 +209,13 @@ export function setupCollaboration({ stunUrl, getView, applyView, setSteering, f
             status.textContent = message;
           } else if (result.status !== 'disconnected') status.textContent = result.message || result.status;
         } });
+      if (liveDesign) localDrafts.hidden = true;
+      if (liveDesign) design.connect({
+        ...credentials, send: (to, data) => session.sendDesign(to, data), sendPreview: instance => session.sendDesignPreview(instance),
+        declareHead: (head, branch) => session.declareHead(head, branch)
+      }, !incoming);
       leave.hidden = false;
-      session.start();
-      const url = new URL(location.href); url.hash = new URLSearchParams(credentials).toString();
-      invite.value = url.href;
+      session.start(); updateInvite(credentials.design);
 
     } catch (error) { reset(); status.textContent = error.message || String(error); }
     finally { if (!session) form.querySelector('button').disabled = false; }
@@ -214,7 +284,7 @@ export function setupCollaboration({ stunUrl, getView, applyView, setSteering, f
   function resolveWaiters(value) { for (const resolve of acquireWaiters.splice(0)) resolve(value); }
   async function acquire() {
     while (applyingView) await new Promise(resolve => viewWaiters.push(resolve));
-    if (!session) return Promise.resolve(true);
+    if (!session || liveDesign) return Promise.resolve(true);
     if (!connected || !state?.peerId || (state.lease && state.lease.peerId !== state.peerId)) return Promise.resolve(false);
     if (state.lease?.peerId === state.peerId && state.lease.epoch !== releasedEpoch) return Promise.resolve(true);
     return new Promise(resolve => {
@@ -235,7 +305,7 @@ export function setupCollaboration({ stunUrl, getView, applyView, setSteering, f
     if (down) { down.clientX = event.clientX; down.clientY = event.clientY; }
   }, { capture: true, passive: true });
   scene.addEventListener('pointerdown', event => {
-    if (!session || !event.isTrusted || event.target.closest?.('button')) return;
+    if (!session || liveDesign || !event.isTrusted || event.target.closest?.('button')) return;
     event.stopImmediatePropagation(); event.preventDefault();
     gesture = true;
     const target = event.target; target.focus?.({ preventScroll: true });
@@ -255,7 +325,7 @@ export function setupCollaboration({ stunUrl, getView, applyView, setSteering, f
   window.addEventListener('blur', () => { activePointers.clear(); gesture = false; releaseIfIdle(); });
   scene.addEventListener('lostpointercapture', endGesture);
   scene.addEventListener('wheel', event => {
-    if (!session || !event.isTrusted) return;
+    if (!session || liveDesign || !event.isTrusted) return;
     event.stopImmediatePropagation(); event.preventDefault();
     const target = event.target;
     const init = { bubbles: true, cancelable: true, deltaX: event.deltaX, deltaY: event.deltaY, deltaMode: event.deltaMode,
@@ -265,7 +335,7 @@ export function setupCollaboration({ stunUrl, getView, applyView, setSteering, f
       .finally(() => { actionCount--; releaseIfIdle(); });
   }, { capture: true, passive: false });
   scene.addEventListener('keydown', event => {
-    if (!session || !event.isTrusted || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    if (!session || liveDesign || !event.isTrusted || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
     event.stopImmediatePropagation(); event.preventDefault();
     const target = event.target;
     const init = { bubbles: true, cancelable: true, key: event.key, code: event.code, ctrlKey: event.ctrlKey, shiftKey: event.shiftKey };
@@ -275,7 +345,11 @@ export function setupCollaboration({ stunUrl, getView, applyView, setSteering, f
   }, true);
   new ResizeObserver(renderCursors).observe(scene);
   return {
-    viewerReady() { if (!session) form.querySelector('button').disabled = false; },
+    viewerReady() {
+      listLocalDrafts().catch(() => {});
+      if (!session) form.querySelector('button').disabled = false;
+      if (!incoming && getDesignSession) Promise.resolve(getDesignSession()).then(controller => { designLabel.hidden = !controller; }).catch(() => {});
+    },
     async runAction(action, restore) {
       actionCount++;
       try {

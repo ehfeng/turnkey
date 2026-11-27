@@ -3,9 +3,10 @@ import { test } from 'node:test';
 import { COLLABORATION_PROTOCOL_VERSION } from '../shared/collaboration-protocol.mjs';
 import { createCollaboration } from '../preview/collaboration-transport.mjs';
 
-function setup(t) {
+function setup(t, options = {}) {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
-  const receiver = { cursors: [], views: [] };
+  const receiver = { cursors: [], views: [], design: [] };
+  const channels = new Map();
   let socket, channel;
   class TestSocket {
     static OPEN = 1;
@@ -18,13 +19,14 @@ function setup(t) {
     close() { this.readyState = 3; }
   }
   class TestPeer {
-    createDataChannel() {
+    createDataChannel(label, config) {
       channel = {
         readyState: 'open', bufferedAmount: 0, sent: [],
         send(data) { this.sent.push(JSON.parse(data)); },
         receive(message) { this.onmessage({ data: JSON.stringify(message) }); },
         close() { this.readyState = 'closed'; }
       };
+      channels.set(label, { channel, config });
       return channel;
     }
     async createOffer() { return { type: 'offer' }; }
@@ -35,7 +37,8 @@ function setup(t) {
   globalThis.WebSocket = TestSocket;
   globalThis.RTCPeerConnection = TestPeer;
   const session = createCollaboration({
-    signalingUrl: 'wss://example.test/ws', room: 'example',
+    ...options, signalingUrl: 'wss://example.test/ws', room: 'example',
+    onDesign: (data, from) => receiver.design.push({ data, from }),
     onCursor: cursor => receiver.cursors.push(cursor), onSnapshot: view => receiver.views.push(view)
   });
   session.start();
@@ -46,7 +49,7 @@ function setup(t) {
     globalThis.WebSocket = originalSocket;
     globalThis.RTCPeerConnection = originalPeer;
   });
-  return { receiver, socket, channel, session };
+  return { receiver, socket, channel, channels, session };
 }
 
 test('a lost final cursor converges, and a late RTC sample cannot undo a reliable hide', t => {
@@ -107,4 +110,28 @@ test('join advertises the protocol and receives cursors from an older viewer', t
   channel.receive(message(numbered));
   socket.receive(message(hide));
   assert.deepEqual(receiver.cursors, [move, hide, numbered]);
+});
+
+test('design messages use a separately ordered peer channel and reassemble across the relay', t => {
+  const { session, socket, channels, receiver } = setup(t, { design: { sessionId: 'session', head: 'root' } });
+  const { channel, config } = channels.get('design');
+  assert.deepEqual(config, { ordered: true });
+  assert.deepEqual(socket.sent[0].design, { sessionId: 'session', head: 'root' });
+  const short = { kind: 'accepted', sequence: 20 };
+  assert.equal(session.sendDesign('b', short), true);
+  channel.receive(channel.sent[0]);
+  const long = { kind: 'draft', data: '家具'.repeat(14000) };
+  channel.bufferedAmount = 100000;
+  assert.equal(session.sendDesign('b', long), true);
+  for (let i = 0; i < 10; i++) t.mock.timers.tick(10);
+  const chunks = socket.sent.filter(message => message.type === 'relay');
+  assert.ok(chunks.length > 2);
+  for (const chunk of chunks.reverse()) {
+    assert.ok(JSON.stringify(chunk.data).length < 16000);
+    socket.receive({ ...chunk, from: 'b' });
+  }
+  assert.equal(receiver.design.length, 2);
+  assert.deepEqual(receiver.design[0], { data: short, from: 'b' });
+  assert.equal(receiver.design[1].from, 'b');
+  assert.equal(receiver.design[1].data.data === long.data, true);
 });

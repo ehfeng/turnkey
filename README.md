@@ -20,6 +20,16 @@ The [starter directories](templates/) show the asset, room, and level layouts. A
 
 The viewer discovers model entries and schedules under the selected root. A project can supply its own viewer integration in `project/viewer.mjs` and Vite plugins from `turnkey.project.mjs`. The build includes the selected project revision in `build-info.json`.
 
+### Shared furniture layouts
+
+**Place furniture** edits a draft across rooms. Choose **Collaborate** and start a shared design to work on the same draft. An invitation carries the session UUID, project, branch and saved `HEAD`. Joining synchronizes the current revision and completed edits. **Save shared layout** commits the whole draft. **Save as branch** starts a new branch at that design. Open an exact version with `?designVersion=<commit-id>` or the latest version of a branch with `?designBranch=<branch-name>`.
+
+Projects opt in with `sharedDesigns: true` in the viewer configuration and a `designStore({ root, revision, catalog })` factory in `turnkey.project.mjs`. Return a stable `projectId`, a `seedSnapshot()` for the first use, and a `validateSnapshot(snapshot, parent)` function for the project's rooms, footprints and catalog. Instances have stable IDs, room IDs, asset revision IDs, room-local millimetres and yaw in degrees. On Node 22.12, enable SQLite with `NODE_OPTIONS=--experimental-sqlite`, or use Node 22.13 or later. The local service stores commits and catalog records in the project's `.turnkey/` directory. Include this directory in local data backups and exclude it from Git. Hosted projects can use the `turnkey/design-store`, `turnkey/design-api` and `turnkey/catalog-service` adapters with durable SQLite and their editor authorization.
+
+Each design pins a geometry revision and immutable furniture revisions. To reopen layouts against a previous house model, supply `loadDesignGeometry(revision)` in the viewer configuration and retain that revision's geometry module, bundled assets and placement rules. Imported furniture is available as soon as its catalog entry is approved. A dimensional proxy is sufficient for placement. A self-contained GLB can supply the detailed model.
+
+For **Extract with AI**, configure `OPENAI_API_KEY` on the server. `TURNKEY_IMPORT_MODEL` and `TURNKEY_IMPORT_BASE_URL` select the model and Responses API endpoint. Paste manufacturer specifications or enter a product URL, review the evidence and units for each dimension, then approve the asset. Room position and orientation are assigned in the editor.
+
 ### Design history
 
 The viewer opens a revision in its Design model. **Before renovation** in history opens the original condition of the selected space. **Display → Show planned removals** highlights the recorded removals in the model. **Back to design** restores the selected room option. For projects with drawing builders, **Construction drawings** opens Existing, Demolition or Proposed plans. The lower-left viewport controls hold the floor layout alongside the view and camera controls. Whole-house drawings start side by side.

@@ -542,3 +542,10 @@ footer a { color: inherit; text-underline-offset: .2em; }
     clip-path: inset(50%);
   }
 }
+
+#shared-design, #design-fork, #layout-versions[open] { display: grid; gap: .5rem; }
+#design-head, #design-feedback { margin: 0; font-size: .83rem; overflow-wrap: anywhere; }
+#design-feedback:empty { display: none; }
+#layout-versions summary { cursor: pointer; }
+#layout-versions a { font-size: .82rem; width: fit-content; }
+#design-branch-name { width: 100%; min-width: 0; padding: .3rem; }

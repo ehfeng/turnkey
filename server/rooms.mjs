@@ -1,5 +1,8 @@
-import { COLLABORATION_PROTOCOL_VERSION, supportsCollaborationProtocol, INCOMPATIBLE_ROOM_MESSAGE } from '../shared/collaboration-protocol.mjs';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+  COLLABORATION_PROTOCOL_VERSION, supportsCollaborationProtocol, INCOMPATIBLE_ROOM_MESSAGE,
+  validDesignBase, validDesignHead, newRoomDesign, acceptsDesignJoin, electDesignCoordinator, roomDesignFields,
+} from '../shared/collaboration-protocol.mjs';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 
 const MAX_MESSAGE = 64 * 1024;
@@ -65,7 +68,7 @@ export function createRoomService({ allowedOrigin = process.env.TURNKEY_ALLOWED_
     const path = new URL(req.url, 'http://localhost').pathname;
     if (path !== '/api/rooms') return next?.();
     if (req.headers.origin && sameOrigin(req, allowedOrigin)) { res.setHeader('Access-Control-Allow-Origin', req.headers.origin); res.setHeader('Vary', 'Origin'); }
-    if (req.method === 'OPTIONS' && sameOrigin(req, allowedOrigin)) { res.writeHead(204, { 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' }); return res.end(); }
+    if (req.method === 'OPTIONS' && sameOrigin(req, allowedOrigin)) { res.writeHead(204, { 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization' }); return res.end(); }
     if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }); return res.end(); }
     if (!sameOrigin(req, allowedOrigin)) { res.writeHead(403); return res.end(); }
     let body = '', tooLarge = false;
@@ -75,12 +78,14 @@ export function createRoomService({ allowedOrigin = process.env.TURNKEY_ALLOWED_
       let input;
       try { input = body ? JSON.parse(body) : {}; } catch { res.writeHead(400); return res.end(); }
       if (!isObject(input) || (input.view != null && (!isObject(input.view) || !bounded(input.view)))) { res.writeHead(400); return res.end(); }
+      if (input.design != null && !validDesignBase(input.design)) { res.writeHead(400); return res.end('A design session needs its project, branch and HEAD.'); }
       if (!supportsCollaborationProtocol(input.protocolVersion)) { res.writeHead(409); return res.end(INCOMPATIBLE_ROOM_MESSAGE); }
       if (rooms.size >= MAX_ROOMS) { res.writeHead(503); return res.end(); }
       const room = id(12), token = id(24);
-      rooms.set(room, { token, protocolVersion: COLLABORATION_PROTOCOL_VERSION, revision: typeof input.revision === 'string' ? input.revision.slice(0, 80) : null, peers: new Map(), view: input.view ?? null, viewSeq: null, viewEpoch: null, viewFrom: null, lease: null, updatedAt: Date.now() });
+      const design = input.design ? newRoomDesign(input.design, randomUUID()) : null;
+      rooms.set(room, { token, design, protocolVersion: COLLABORATION_PROTOCOL_VERSION, revision: typeof input.revision === 'string' ? input.revision.slice(0, 80) : null, peers: new Map(), view: input.view ?? null, viewSeq: null, viewEpoch: null, viewFrom: null, lease: null, updatedAt: Date.now() });
       res.writeHead(201, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ room, token }));
+      res.end(JSON.stringify({ room, token, ...roomDesignFields({ design }) }));
     });
   }
   function handleUpgrade(req, socket, head) {
@@ -104,6 +109,10 @@ export function createRoomService({ allowedOrigin = process.env.TURNKEY_ALLOWED_
         if (message.type !== 'join' || typeof message.room !== 'string') return error(socket, 'join-required', 'Join a room first');
         room = rooms.get(message.room);
         if (!room || !matches(room.token, message.token)) { error(socket, 'invalid-invite', 'Invalid room or invite'); return socket.close(1008, 'Invalid invite'); }
+        if (!acceptsDesignJoin(room.design, message.design)) {
+          error(socket, 'invalid-invite', 'This invitation must identify the design session and its HEAD.');
+          return socket.close(1008, 'Invalid design invitation');
+        }
         if (!supportsCollaborationProtocol(room.protocolVersion) || !supportsCollaborationProtocol(message.protocolVersion)) {
           error(socket, 'revision-mismatch', INCOMPATIBLE_ROOM_MESSAGE);
           return socket.close(1008, 'Incompatible protocol');
@@ -117,13 +126,18 @@ export function createRoomService({ allowedOrigin = process.env.TURNKEY_ALLOWED_
         const peers = [...room.peers.values()].map(publicPeer);
         room.peers.set(peer.peerId, peer);
         room.updatedAt = Date.now();
-        send(socket, { type: 'joined', peerId: peer.peerId, role: peer.role, peers, view: room.view, viewSeq: room.viewSeq, viewEpoch: room.viewEpoch, viewFrom: room.viewFrom, lease: room.lease });
-        broadcast(room, { type: 'peer-joined', peer: publicPeer(peer) }, socket);
+        electDesignCoordinator(room.design, [...room.peers.keys()]);
+        send(socket, { type: 'joined', peerId: peer.peerId, role: peer.role, peers, view: room.view, viewSeq: room.viewSeq, viewEpoch: room.viewEpoch, viewFrom: room.viewFrom, lease: room.lease, ...roomDesignFields(room) });
+        broadcast(room, { type: 'peer-joined', peer: publicPeer(peer), ...roomDesignFields(room) }, socket);
         return;
       }
       room.updatedAt = Date.now();
       expireLease(room);
-      if (message.type === 'lease-request' || message.type === 'lease-renew') {
+      if (message.type === 'design-head') {
+        if (room.design?.coordinatorId !== peer.peerId || !validDesignHead(message)) return error(socket, 'invalid-design-head', 'Only the current coordinator can declare a saved branch and HEAD.');
+        Object.assign(room.design, { head: message.head, branch: message.branch });
+        broadcast(room, { type: 'design-state', design: room.design });
+      } else if (message.type === 'lease-request' || message.type === 'lease-renew') {
         if (message.type === 'lease-renew' && !room.lease) return;
         if (!room.lease || room.lease.peerId === peer.peerId) setLease(room, { peerId: peer.peerId, expiresAt: Date.now() + LEASE_MS, epoch: room.lease?.epoch ?? id(12) });
         else error(socket, 'lease-held', 'Another participant is steering');
@@ -154,7 +168,8 @@ export function createRoomService({ allowedOrigin = process.env.TURNKEY_ALLOWED_
       room.peers.delete(peer.peerId);
       room.updatedAt = Date.now();
       if (room.lease?.peerId === peer.peerId) setLease(room, null);
-      broadcast(room, { type: 'peer-left', peerId: peer.peerId });
+      electDesignCoordinator(room.design, [...room.peers.keys()]);
+      broadcast(room, { type: 'peer-left', peerId: peer.peerId, ...roomDesignFields(room) });
     });
   });
   function close() { clearInterval(cleanup); clearInterval(heartbeat); for (const client of wss.clients) client.terminate(); wss.close(); }
