@@ -1,3 +1,5 @@
+import { bundledAssetRevision } from '../shared/catalog.mjs';
+import { importedPlacementAssets } from './catalog-runtime.mjs';
 import { highlightDemolition } from './demolition-materials.mjs';
 import { applyPlacement } from '../lib/frame.mjs';
 import { FURNITURE_COLUMNS, isPlaceableAsset, parseFurniture, furnitureOptions, roomOptionIds, resolveFurniture, isPlaced, placeFromRow } from '../lib/furniture.mjs';
@@ -37,11 +39,36 @@ const assetModules = discover(assetFiles);
 
 export async function loadPlacementAssets() {
   const entries = new Map();
-  for (const [id, module] of await loadModules(assetModules)) {
-    if (typeof module.buildAsset !== 'function' || !isPlaceableAsset(module.catalogEntry)) continue;
-    entries.set(id, { id, asset_path: `assets/${id}/model/build.mjs`, entry: module.catalogEntry, buildAsset: module.buildAsset });
+  for (const [id, load] of assetModules) {
+    const entry = assetMetadata[`/assets/${id}/model/metadata.mjs`] ?? (await load()).catalogEntry;
+    if (!isPlaceableAsset(entry)) continue;
+    entries.set(id, { id, asset_path: `assets/${id}/model/build.mjs`, entry,
+      buildAsset: async options => (await load()).buildAsset(options) });
   }
   return entries;
+}
+
+export async function loadDesignAssets(geometryRevision) {
+  const [bundled, imported] = await Promise.all([loadPlacementAssets(), importedPlacementAssets()]);
+  const assets = new Map();
+  for (const asset of bundled.values()) {
+    const assetRevision = bundledAssetRevision(geometryRevision, asset.asset_path);
+    assets.set(assetRevision, { ...asset, assetRevision });
+  }
+  for (const asset of imported) assets.set(asset.assetRevision, asset);
+  return assets;
+}
+
+let designView;
+export function setDesignSnapshot(snapshot, assets) {
+  if (!snapshot) { designView = null; return; }
+  const catalog = new Map([...assets.values()].map(asset => [asset.asset_path, asset.entry]));
+  const byRoom = new Map();
+  for (const instance of snapshot.instances) {
+    if (!byRoom.has(instance.roomId)) byRoom.set(instance.roomId, []);
+    byRoom.get(instance.roomId).push(instance);
+  }
+  designView = { assets, catalog, byRoom };
 }
 
 const GAP_M = 1; // space between unplaced rooms laid out beside the house
@@ -89,19 +116,39 @@ function roomContext(THREE, roomId, option, module, withLevelShell) {
 /** A room group, plus its provisional shell when the room is shown without its level. */
 async function buildRoomGroup(module, roomId, THREE, option, { withShell }) {
   const context = roomContext(THREE, roomId, option, module, !withShell);
-  // Exact builder paths are drawn here. Room-authored fixtures retain their own
-  // placement rules and option checks.
-  const roomFurniture = context.furniture.filter(row => !assetFiles['/' + row.asset_path]);
+  const design = designView;
+  let furniture = context.furniture;
+  if (design && project.isEditablePlacement) {
+    furniture = furniture.filter(row => !project.isEditablePlacement(row, design.catalog));
+  } else if (design && placementRooms.has(roomId)) {
+    const editableIds = new Set((project.readPlacementRows?.(initialRoomCsv(roomId), design.catalog) ??
+      furniture.filter(row => row.phase === 'proposed' && !row.option_id && design.catalog.has(row.asset_path)))
+      .map(row => row.item_id));
+    furniture = furniture.filter(row => row.phase !== 'proposed' || row.option_id || !editableIds.has(row.item_id));
+  }
+  // Independently authored fixtures continue through the room builder.
+  const roomFurniture = furniture.filter(row => !assetFiles['/' + row.asset_path]);
   const room = await buildGroup(module, 'buildRoom', roomId, { ...context, furniture: roomFurniture });
   room.userData.roomId = roomId;
   room.userData.designOption = context.option;
   room.userData.placementRoomId = roomId;
-  for (const row of context.furniture) {
+  for (const row of furniture) {
     const load = assetFiles['/' + row.asset_path];
     if (!load || !isPlaced(row) || row.phase === 'demolition') continue;
     if ((context.option === 'existing-measured' || option === 'existing-measured') && row.phase !== 'existing') continue;
     const asset = await (await load()).buildAsset({ THREE });
     room.add(placeFromRow(asset, row));
+  }
+  if (design && context.option !== 'existing-measured' && option !== 'existing-measured') {
+    for (const instance of design.byRoom.get(roomId) ?? []) {
+      const entry = design.assets.get(instance.assetRevision);
+      if (!entry) throw new Error('Missing furniture asset revision ' + instance.assetRevision);
+      const object = await entry.buildAsset({ THREE });
+      object.userData.itemId = instance.id;
+      object.userData.designAssetRevision = instance.assetRevision;
+      object.name ||= instance.id;
+      room.add(applyPlacement(object, instance));
+    }
   }
   if (withShell && typeof module.buildProvisionalShell === 'function') {
     const shell = await module.buildProvisionalShell({ THREE, option: context.option });

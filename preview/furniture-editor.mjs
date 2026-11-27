@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { placeFromRow } from '../lib/furniture.mjs';
 import project from 'virtual:turnkey-project';
+import { placementInstance, placementRow } from './design-editor-state.mjs';
 import { initialRoomCsv, setRoomCsv, loadPlacementAssets } from './designs.mjs';
 
 const el = id => document.getElementById(id);
@@ -17,11 +18,14 @@ function footprint(entry) {
   return new THREE.BufferGeometry().setFromPoints(points.map(([a,b]) => new THREE.Vector3(cx+a, .008, cz+b)));
 }
 
-export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelChanged, onOpenChange, invalidate }) {
-  const { placementRooms = new Map(), containsAsset, readPlacementRows, serializePlacements } = project;
+export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelChanged, onOpenChange, invalidate, shared }) {
+  const { readPlacementRows, serializePlacements } = project;
+  const rules = () => shared?.rules() ?? project;
+  const emptyRooms = new Map();
+  const placementRooms = () => rules().placementRooms ?? emptyRooms;
   // Each room owns an independent draft, undo stack and optimistic-save baseline.
   const sessions = new Map();
-  const bundledCsv = new Map([...placementRooms.keys()].map(id => [id, initialRoomCsv(id)]));
+  const bundledCsv = new Map([...placementRooms().keys()].map(id => [id, initialRoomCsv(id)]));
   let storage = import.meta.env.DEV ? 'local' : 'unknown';
   let writable = storage === 'local';
   let indexRequest;
@@ -30,9 +34,11 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
   const panel = el('furniture-editor'), rooms = el('placement-room'), palette = el('placement-asset');
   const instances = el('placement-instance'), height = el('placement-height'), status = el('placement-status');
   const ray = new THREE.Raycaster(), plane = new THREE.Plane(), pointer = new THREE.Vector2();
-  let scope = '', roomId, room, canvas, marker, markerAsset, overlay, action, start;
+  let scope = '', roomId, room, canvas, attached, marker, markerAsset, overlay, action, actionRow, start;
+  const peerMarkers = new Map();
+  let previousPreviewAt = -Infinity;
   let opened = false, entering = 0, busy = false;
-  const draft = () => sessions.get(roomId);
+  const draft = () => shared ? shared.room(roomId) : sessions.get(roomId);
   const selectedRow = () => draft()?.rows.find(row => row.item_id === draft().selected);
   const dirty = session => session.csv !== session.baseCsv;
 
@@ -82,12 +88,14 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
   }
 
   function refreshLayouts() {
-    if (!placementRooms.size || storage === 'static' || storage === 'local') return {};
+    if (shared) return shared.refresh();
+    if (!placementRooms().size || storage === 'static' || storage === 'local') return {};
     indexRequest ??= readIndex().finally(() => { indexRequest = undefined; });
     return indexRequest;
   }
 
   async function prepare(id, discard = false) {
+    if (shared) { await shared.refresh(); return false; }
     const session = sessions.get(id);
     if (session && dirty(session) && !discard) return false;
     const beforeRead = session?.csv;
@@ -146,15 +154,93 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
     invalidate();
   }
 
+  // Imported and bundled instances are both marked at their room-local root.
+  // Keep authored structures in the same room intact when reconciling a shared edit.
+  let projectionPass = 0;
+  async function updateDesignModel() {
+    if (!shared || !attached || !assets) { updateUi(); return; }
+    const target = attached, pass = ++projectionPass;
+    const roomGroups = [];
+    target.traverse(node => {
+      if (node.userData.placementRoomId && node.userData.designOption !== 'existing-measured') roomGroups.push(node);
+    });
+    const drops = [], placements = [], additions = [];
+    try {
+      for (const group of roomGroups) {
+        const remaining = new Map(group.children.filter(node => node.userData.designAssetRevision)
+          .map(node => [node.userData.itemId, node]));
+        for (const pose of shared.room(group.userData.placementRoomId).rows) {
+          let node = remaining.get(pose.item_id);
+          if (node?.userData.designAssetRevision === pose.asset_path) remaining.delete(pose.item_id);
+          else {
+            const asset = assets.get(pose.asset_path);
+            if (!asset) continue;
+            node = await asset.buildAsset({ THREE });
+            node.userData.designAssetRevision = pose.asset_path;
+            additions.push([group, node]);
+          }
+          placements.push([node, pose]);
+        }
+        for (const node of remaining.values()) drops.push([group, node]);
+      }
+      if (target !== attached || projectionPass !== pass) return;
+      for (const [group, node] of additions) group.add(node);
+      for (const [node, pose] of placements) placeFromRow(node, pose);
+      for (const [group, node] of drops) { group.remove(node); dispose(node); }
+      if (opened && room && !action) {
+        const selected = selectedRow();
+        showMarker(selected && assets.get(selected.asset_path), selected);
+        if (selected && document.activeElement !== height) height.value = selected.z_mm;
+      }
+      onModelChanged();
+      updateUi();
+    } finally {
+      for (const [, node] of additions) if (!node.parent) dispose(node);
+    }
+  }
+
+  function clearPeerMarker(peer) {
+    const line = peerMarkers.get(peer);
+    if (line) { line.removeFromParent(); dispose(line); peerMarkers.delete(peer); }
+  }
+  function clearPeerMarkers() {
+    for (const peer of peerMarkers.keys()) clearPeerMarker(peer);
+  }
+  shared?.onPreview((pose, peer) => {
+    const asset = pose && assets?.get(pose.assetRevision);
+    let owner;
+    if (asset) attached?.traverse(node => {
+      if (node.userData.placementRoomId === pose.roomId) owner = node;
+    });
+    let line = peerMarkers.get(peer);
+    if (!owner || owner !== line?.parent || pose.assetRevision !== line?.userData.assetRevision) {
+      clearPeerMarker(peer);
+      line = null;
+    }
+    if (owner) {
+      if (!line) {
+        line = new THREE.Line(footprint(asset.entry), new THREE.LineBasicMaterial({ color: 0x8a55b5, depthTest: false }));
+        line.renderOrder = 5;
+        line.userData.assetRevision = pose.assetRevision;
+        owner.add(line);
+        peerMarkers.set(peer, line);
+      }
+      placeFromRow(line, placementRow(pose));
+      // A transient outline must never be mistaken for a placed furniture root when picking.
+      delete line.userData.itemId;
+    }
+    invalidate();
+  });
+
   function roomChoices() {
     const level = scope.startsWith('level/') ? scope.slice(6) : null;
-    return [...placementRooms.values()].filter(item => !level || item.levelId === level);
+    return [...placementRooms().values()].filter(item => !level || item.levelId === level);
   }
 
   function updateUi(message) {
     const session = draft(), selected = selectedRow();
     const choices = roomChoices();
-    const available = scope === 'house' || scope.startsWith('level/') || placementRooms.has(roomId);
+    const available = scope === 'house' || scope.startsWith('level/') || placementRooms().has(roomId);
     el('place-furniture').hidden = !available || !choices.length;
     const show = opened && available;
     if (panel.hidden === show) {
@@ -168,25 +254,26 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
     }));
     rooms.value = roomId ?? '';
     rooms.disabled = busy;
-    const ready = Boolean(room && session && assets);
+    const ready = Boolean(room && session && assets && (!shared || shared.ready));
     el('placement-tools').hidden = !ready;
     el('cancel-placement').hidden = !action || !ready || busy;
-    el('save-layout').hidden = !ready;
+    el('save-layout').hidden = Boolean(shared) || !ready;
     el('save-layout').textContent = writable ? 'Save room layout' : 'Export room CSV';
     el('layout-key-label').hidden = !ready || storage !== 'cloud' || !writable;
-    el('export-layout').hidden = !ready || !writable || !dirty(session);
-    el('reload-layout').hidden = !ready || !session.conflict;
+    el('export-layout').hidden = Boolean(shared) || !ready || !writable || !dirty(session);
+    el('reload-layout').hidden = Boolean(shared) || !ready || !session.conflict;
     el('reload-layout').disabled = busy;
-    el('save-layout').disabled = !ready || !dirty(session) || busy;
+    el('save-layout').disabled = Boolean(shared) || !ready || !dirty(session) || busy;
     if (ready) {
       instances.replaceChildren(new Option('Choose an item', ''), ...session.rows.map((row, i) =>
-        new Option((i + 1) + ' · ' + assetsByPath.get(row.asset_path).entry.name, row.item_id)));
+        new Option((i + 1) + ' · ' + (assetsByPath.get(row.asset_path)?.entry.name ?? row.asset_path), row.item_id)));
       instances.value = session.selected ?? '';
       instances.disabled = busy || !session.rows.length;
       for (const id of ['move-item','rotate-item','duplicate-item','remove-item']) el(id).disabled = !selected || busy;
-      el('undo-item').disabled = !session.history.length || busy;
-      palette.disabled = height.disabled = el('add-item').disabled = busy;
+      el('undo-item').disabled = (shared ? !shared.canUndo : !session.history.length) || busy;
+      palette.disabled = height.disabled = el('add-item').disabled = busy || !assets.size;
     }
+    shared?.update();
     el('scene').classList.toggle('placing', Boolean(action) && !panel.hidden);
     if (message !== undefined) status.textContent = message;
     invalidate();
@@ -194,6 +281,7 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
 
   function choose(id) {
     const session = draft();
+    if (!session) return;
     session.selected = id;
     action = null;
     const row = selectedRow(), asset = row && assetsByPath.get(row.asset_path);
@@ -203,18 +291,20 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
     } else {
       height.value = assets.get(palette.value)?.entry.default_z_mm ?? 0;
     }
+    shared?.preview(null);
     showMarker(asset, row);
     const notes = row ? 'Facing ' + row.yaw_deg + '°.' : 'Choose an asset, then Place.';
     const destination = storage === 'cloud' && !writable ? ' This cloud viewer is read-only.' : '';
-    updateUi(notes + (dirty(session) ? ' Unsaved room changes.' : ' Placements apply across design options.') + destination);
+    updateUi(shared ? notes : notes + (dirty(session) ? ' Unsaved room changes.' : ' Placements apply across design options.') + destination);
   }
 
   async function enterRoom(id, discard = false) {
-    if (!placementRooms.has(id)) return;
+    if (!placementRooms().has(id)) return;
     const ticket = ++entering, initialScope = scope;
     updateUi('Opening room…');
     try {
-      if (!assets) await loadAssets();
+      if (shared) await shared.refresh();
+      else if (!assets) await loadAssets();
       if (ticket !== entering || initialScope !== scope || !opened) return;
       const changed = await prepare(id, discard);
       if (ticket !== entering || initialScope !== scope || !opened) return;
@@ -232,12 +322,13 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
   }
 
   function assetForAction() {
-    return action === 'add' ? assets.get(palette.value) : assetsByPath.get(selectedRow()?.asset_path);
+    return action === 'add' ? assets.get(palette.value) : assetsByPath.get((actionRow ?? selectedRow())?.asset_path);
   }
 
   function begin(kind) {
     if (currentHeight() === null) { updateUi('Enter the anchor height in millimetres.'); return; }
     action = kind;
+    actionRow = selectedRow();
     showMarker();
     const verb = kind === 'move' ? 'move the item' : kind === 'duplicate' ? 'place the copy' : 'place the asset';
     updateUi('Choose a spot on the room plan to ' + verb + '.');
@@ -256,14 +347,19 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
     if (!point) return null;
     room.worldToLocal(point);
     return { x_mm: Math.round(point.x * 1000), y_mm: Math.round(-point.z * 1000),
-      z_mm: z, yaw_deg: action === 'add' ? 0 : selectedRow()?.yaw_deg ?? 0 };
+      z_mm: z, yaw_deg: action === 'add' ? 0 : (actionRow ?? selectedRow())?.yaw_deg ?? 0 };
   }
 
-  const fits = (asset, pose) => containsAsset(roomId, asset.entry, pose.x_mm, pose.y_mm, pose.yaw_deg);
+  const fits = (asset, pose) => asset && rules().containsAsset(roomId, asset.entry, pose.x_mm, pose.y_mm, pose.yaw_deg);
   function hover(event) {
     if (!action || panel.hidden || !room) return;
     const pose = aim(event), asset = assetForAction();
     showMarker(asset, pose, pose && fits(asset, pose));
+    const now = performance.now();
+    if (shared && asset && pose && now - previousPreviewAt >= 1000 / 30) {
+      previousPreviewAt = now;
+      shared.preview(placementInstance(roomId, { item_id: actionRow?.item_id ?? 'preview', asset_path: asset.id, ...pose }));
+    }
   }
 
   // Build additions before updating the CSV and the active group. An async builder
@@ -312,8 +408,30 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
     }
   }
 
+  async function editRow(before, after, select) {
+    const session = draft();
+    if (!session || busy) return;
+    if (shared) {
+      if (!shared.ready) return;
+      const originalRoom = roomId;
+      busy = true;
+      updateUi();
+      try {
+        await shared.edit(originalRoom, before, after);
+        if (roomId === originalRoom) choose(select);
+      } catch (error) { updateUi(error.message); }
+      finally { busy = false; updateUi(); }
+      return;
+    }
+    let rows;
+    if (!before) rows = [...session.rows, after];
+    else if (!after) rows = session.rows.filter(row => row.item_id !== before.item_id);
+    else rows = session.rows.map(row => row.item_id === before.item_id ? after : row);
+    await edit(rows, select);
+  }
+
   function pick(event) {
-    if (panel.hidden || busy || !room || !draft() || !start || start.id !== event.pointerId) return;
+    if (panel.hidden || busy || (shared && !shared.ready) || !room || !draft() || !start || start.id !== event.pointerId) return;
     const { x, y } = start;
     start = null;
     if (Math.hypot(x - event.clientX, y - event.clientY) > 5) return;
@@ -333,10 +451,10 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
     }
     const session = draft();
     if (action === 'move') {
-      void edit(session.rows.map(row => row.item_id === session.selected ? { ...row, ...pose } : row), session.selected);
+      void editRow(actionRow, { ...actionRow, ...pose }, actionRow.item_id);
     } else {
       const id = newerId();
-      void edit([...session.rows, { item_id: id, asset_path: asset.asset_path, ...pose }], id);
+      void editRow(null, { item_id: id, asset_path: asset.asset_path, ...pose }, id);
     }
   }
 
@@ -346,7 +464,7 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
     else updateUi('Choose the room where you want to place an asset.');
   };
   rooms.onchange = () => { if (rooms.value) void enterRoom(rooms.value); };
-  el('finish-edit').onclick = () => { ++entering; opened = false; action = null; showMarker(); updateUi(); };
+  el('finish-edit').onclick = () => { ++entering; opened = false; action = null; shared?.preview(null); showMarker(); updateUi(); };
   el('add-item').onclick = () => begin('add');
   el('move-item').onclick = () => begin('move');
   el('duplicate-item').onclick = () => begin('duplicate');
@@ -356,7 +474,7 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
     const row = selectedRow(), z = currentHeight();
     if (z === null) { updateUi('Enter the anchor height in millimetres.'); return; }
     if (row && action !== 'add' && z !== row.z_mm) {
-      void edit(draft().rows.map(item => item === row ? { ...item, z_mm: z } : item), row.item_id);
+      void editRow(row, { ...row, z_mm: z }, row.item_id);
     }
   };
   el('rotate-item').onclick = () => {
@@ -365,13 +483,21 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
     if (!fits(assetsByPath.get(row.asset_path), pose)) {
       updateUi('Move this item away from the room edge before rotating.'); return;
     }
-    void edit(draft().rows.map(item => item === row ? pose : item), row.item_id);
+    void editRow(row, pose, row.item_id);
   };
   el('remove-item').onclick = () => {
     const next = draft().rows.filter(row => row.item_id !== draft().selected);
-    void edit(next, next.at(-1)?.item_id);
+    void editRow(selectedRow(), null, next.at(-1)?.item_id);
   };
-  el('undo-item').onclick = () => {
+  el('undo-item').onclick = async () => {
+    if (shared) {
+      busy = true;
+      updateUi();
+      try { await shared.undo(); choose(draft()?.selected); }
+      catch (error) { updateUi(error.message); }
+      finally { busy = false; updateUi(); }
+      return;
+    }
     const previous = draft().history.at(-1);
     void edit(previous.rows, previous.selected, previous);
   };
@@ -387,7 +513,7 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
     if (event.key === 'Escape') cancelPlacement();
   });
   window.addEventListener('beforeunload', event => {
-    if ([...sessions.values()].some(dirty)) { event.preventDefault(); event.returnValue = ''; }
+    if (shared ? shared.state.dirty : [...sessions.values()].some(dirty)) { event.preventDefault(); event.returnValue = ''; }
   });
 
   function exportDraft() {
@@ -441,14 +567,32 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
 
   return {
     refreshLayouts,
+    updateDesignControls: updateUi,
+    updateDesignAssets(next) {
+      const previous = palette.value;
+      assets = new Map([...next].map(([revision, asset]) =>
+        [revision, { ...asset, id: revision, asset_path: revision }]));
+      assetsByPath = assets;
+      palette.replaceChildren(...[...assets].map(([revision, asset]) => new Option(asset.entry.name, revision)));
+      if (assets.has(previous)) palette.value = previous;
+    },
+    selectDesignAsset(revision) {
+      if (!assets?.has(revision)) return;
+      palette.value = revision;
+      if (draft()) choose(null);
+    },
+    updateDesignModel,
     detach() {
       scope = '';
-      room = roomId = action = null;
-      opened = false;
+      room = roomId = action = actionRow = attached = null;
+      if (!shared) opened = false;
+      clearPeerMarkers();
+      shared?.preview(null);
       clearMarker();
       updateUi();
     },
     attach(id, model, element) {
+      attached = id ? model : null;
       scope = id;
       roomId = id.startsWith('room/') ? id.slice(5) : null;
       room = roomId && model.userData.placementRoomId === roomId ? model : null;
@@ -459,9 +603,10 @@ export function furnitureEditor({ openRoom, getCamera, scene, dispose, onModelCh
           if (event.button === 0) start = { x: event.clientX, y: event.clientY, id: event.pointerId };
         });
         canvas.addEventListener('pointerup', pick);
-        canvas.addEventListener('pointerleave', () => { if (action) showMarker(); });
+        canvas.addEventListener('pointerleave', () => { if (action) { showMarker(); shared?.preview(null); } });
       }
       updateUi();
+      if (shared && attached) void updateDesignModel().catch(error => updateUi(error.message));
     }
   };
 }

@@ -170,6 +170,25 @@
             <button id="finish-edit" type="button">Close</button>
           </div>
         </div>
+        <div id="shared-design" hidden>
+          <p id="design-head" role="status"></p>
+          <div class="editor-actions">
+            <button id="commit-design" type="button">Save shared layout</button>
+            <button id="open-design-fork" type="button" aria-controls="design-fork" aria-expanded="false">Save as branch</button>
+          </div>
+          <form id="design-fork" hidden>
+            <label class="editor-field">New branch name <input id="design-branch-name" required maxlength="128" autocomplete="off"></label>
+            <button type="submit">Create branch</button>
+          </form>
+          <details id="layout-versions"><summary>Saved layouts</summary>
+            <label class="editor-field">Branch <select id="design-branch"></select></label>
+            <a id="open-design-branch" target="_blank" rel="noopener">Open branch in new tab</a>
+            <label class="editor-field">Version <select id="design-version"></select></label>
+            <a id="open-design-version" target="_blank" rel="noopener">View version in new tab</a>
+          </details>
+          <div id="design-catalog-import"></div>
+          <p id="design-feedback" role="status" aria-live="polite"></p>
+        </div>
         <label class="editor-field">Room <select id="placement-room"></select></label>
         <div id="placement-tools" hidden>
           <label class="editor-field">Asset <select id="placement-asset"></select></label>
