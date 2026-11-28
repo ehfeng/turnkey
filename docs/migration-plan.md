@@ -14,5 +14,7 @@ Each phase uses implementation and independent review, followed by fixes and an 
 
 ## Status
 
-- Phase 1 in progress. Fresh full clones obtained. Production database and asset export not yet available in this environment.
-- No production writes or deployment performed.
+- Phases 1–3 implemented with independent review, synthetic tests, and packed-release verification.
+- Phase 4 implemented and rehearsed on a local database copy. The original house sources, 95 resolved scene cases, and 12 browser render/control comparisons match. History import preserves recorded ancestry and missing associations explicitly. Production-only layout history is not available to this rehearsal.
+- Phase 5 remains gated on a consistent production database and stored-asset export, hosted configuration, final dry run and rollback verification. No production writes or deployment performed.
+- Dayst records detailed evidence and remaining product acceptance gaps in `docs/migration-verification.md`. This migration foundation is not a claim that the entire long-term board/presence/semantic-model-tool specification is shipped.
