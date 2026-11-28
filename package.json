@@ -1,6 +1,6 @@
 {
   "name": "turnkey",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Local viewer and validation tools for versioned house projects",
   "type": "module",
@@ -23,7 +23,16 @@
     "./design-plugin": "./server/design-plugin.mjs",
     "./catalog": "./shared/catalog.mjs",
     "./catalog-service": "./server/catalog.mjs",
-    "./catalog-local": "./server/catalog-local.mjs"
+    "./catalog-local": "./server/catalog-local.mjs",
+    "./project": "./shared/project.mjs",
+    "./project-merge": "./shared/project-merge.mjs",
+    "./project-store": "./server/project-store.mjs",
+    "./project-api": "./server/project-api.mjs",
+    "./project-mcp": "./server/project-mcp.mjs",
+    "./project-docs": "./server/project-docs.mjs",
+    "./project-board": "./shared/project-board.mjs",
+    "./project-assets": "./server/project-assets.mjs",
+    "./project-board-tools": "./server/project-board-tools.mjs"
   },
   "files": [
     "bin",
@@ -32,7 +41,9 @@
     "shared",
     "templates",
     "preview",
-    "index.html"
+    "index.html",
+    "schemas",
+    "docs"
   ],
   "scripts": {
     "dev": "node bin/turnkey.mjs dev",
