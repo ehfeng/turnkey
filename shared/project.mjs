@@ -33,7 +33,7 @@ export function normalizeProjectState(value, { completeness = 'complete' } = {})
   if (!/^[a-f0-9]{40,64}$/.test(state.repository.commit)) throw projectError(400, 'invalid_state', 'Repository commit must be a full immutable Git object ID.');
   if (state.design != null) state.design = normalizeDesignSnapshot(state.design);
   if (completeness === 'complete') {
-    if (!state.design || !state.viewer || !state.boards) throw projectError(400, 'incomplete_state', 'Complete project state requires design, boards, and viewer components.');
+    if (!state.design || !state.viewer || typeof state.viewer !== 'object' || Array.isArray(state.viewer) || !state.boards || typeof state.boards !== 'object' || Array.isArray(state.boards)) throw projectError(400, 'incomplete_state', 'Complete project state requires design, boards, and viewer components.');
   } else if (completeness !== 'source-only') throw projectError(400, 'invalid_state', 'Unknown completeness classification.');
   // ID collections merge by identity. Duplicates must never collapse in a merge.
   function ids(v, path) {

@@ -130,3 +130,11 @@ test('stable-ID sequence merges independent insertions and exposes incompatible 
   const resolved=mergeProjectStates(base,target,source,{[merge.conflicts[0].id]:{choice:'source'}});assert.deepEqual(resolved.candidate,source);
   assert.deepEqual(diffProjectStates(base,target).map(x=>x.path),['/items/$order']);
 });
+test('direct store callers cannot bypass project scope or revision schema',()=>{
+  const {store}=fixture();
+  assert.throws(()=>store.commit({projectId:'different',branch:'main',expectedHeadRevisionId:'root',operationId:'wrong-project',actor,state:baseState()}),e=>e.code==='project_mismatch');
+  assert.throws(()=>store.commit({branch:'main',expectedHeadRevisionId:'root',operationId:'bad-message',actor,state:baseState(),message:{untyped:true}}),e=>e.code==='invalid_revision');
+  assert.throws(()=>edit(store,'main','root','bad-boards',s=>s.boards='latest'),e=>e.code==='incomplete_state');
+  assert.throws(()=>store.importHistory({operationId:'wrong-import',actor,revisions:[{projectId:'different',id:'wrong',parentRevisionIds:[],createdAt:'2020-01-01',actor:null,state:{repository:{commit:sha}}}],branches:[]}),e=>e.code==='project_mismatch');
+  assert.equal(store.listBranches()[0].headRevisionId,'root');assert.equal(store.events().events.length,1);
+});

@@ -62,8 +62,15 @@ export function createProjectStore({sql,transaction,projectId,validateState,make
     const event={id:makeId(),schemaVersion:1,type,createdAt:now(),projectId,operationId,actor,branch,previousRevisionId,revisionId,...extra};
     sql.exec('INSERT INTO project_events(project,id,document) VALUES(?,?,?)',projectId,event.id,canonical(event));
   }
+  function revisionFields(input) {
+    const message=input.message??'', affectedObjectIds=input.affectedObjectIds??[];
+    if(typeof message!=='string'||!Array.isArray(affectedObjectIds)||new Set(affectedObjectIds).size!==affectedObjectIds.length) throw projectError(400,'invalid_revision','Revision message must be text and affectedObjectIds must be a unique ID list.');
+    affectedObjectIds.forEach(id=>required(id,'affected object ID'));
+    return {message,affectedObjectIds};
+  }
   function operation(kind,input,fn) {
     const op=copy(input); required(op.operationId,'operation ID');
+    if(op.projectId!==undefined&&op.projectId!==projectId) throw projectError(400,'project_mismatch','Operation project disagrees with the bound store.');
     if(op.actor===undefined||op.actor===null) throw projectError(401,'actor_required','A trusted actor is required for new operations.');
     const request=canonical({kind,input:op});
     return transaction(()=>{
@@ -82,8 +89,7 @@ export function createProjectStore({sql,transaction,projectId,validateState,make
     const parent=getRevision(parents[0]); assertComplete(parent);
     validate(state,parent.state,{kind:type,parentRevisionIds:parents,...extra});
     const id=makeId();
-    const rev={schemaVersion:1,id,projectId,parentRevisionIds:parents,createdAt:now(),actor:input.actor,message:input.message??'',operationId:input.operationId,
-      affectedObjectIds:input.affectedObjectIds??[],completeness:'complete',components:storeComponents(state),...extra};
+    const rev={schemaVersion:1,id,projectId,parentRevisionIds:parents,createdAt:now(),actor:input.actor,...revisionFields(input),operationId:input.operationId,completeness:'complete',components:storeComponents(state),...extra};
     sql.exec('INSERT INTO project_revisions(project,id,document) VALUES(?,?,?)',projectId,id,canonical(rev));
     sql.exec('UPDATE project_branches SET head=? WHERE project=? AND name=? AND head=?',id,projectId,input.branch,parents[0]);
     emit(type,input.operationId,input.actor,input.branch,parents[0],id,{affectedObjectIds:rev.affectedObjectIds});
@@ -180,6 +186,7 @@ export function createProjectStore({sql,transaction,projectId,validateState,make
     const pending=new Map();
     for(const raw of op.revisions) {
       required(raw.id,'import revision ID');
+      if(raw.projectId!==undefined&&raw.projectId!==projectId) throw projectError(400,'project_mismatch','Imported revision belongs to another project.');
       if(pending.has(raw.id)) throw projectError(400,'duplicate_revision','Duplicate imported revision ID.');
       if(!Array.isArray(raw.parentRevisionIds)||new Set(raw.parentRevisionIds).size!==raw.parentRevisionIds.length) throw projectError(400,'invalid_parents','Revision parents must be unique IDs.');
       raw.parentRevisionIds.forEach(id=>required(id,'parent revision ID'));
@@ -200,7 +207,7 @@ export function createProjectStore({sql,transaction,projectId,validateState,make
     for(const id of pending.keys())visit(id);
     let imported=0;
     for(const {raw,state,completeness} of ordered) {
-      const metadata={schemaVersion:1,id:raw.id,projectId,parentRevisionIds:raw.parentRevisionIds,createdAt:raw.createdAt,actor:raw.actor,message:raw.message??'',operationId:raw.operationId??null,affectedObjectIds:raw.affectedObjectIds??[],completeness,...(raw.source!==undefined?{source:raw.source}:{})};
+      const metadata={schemaVersion:1,id:raw.id,projectId,parentRevisionIds:raw.parentRevisionIds,createdAt:raw.createdAt,actor:raw.actor,...revisionFields(raw),operationId:raw.operationId??null,completeness,...(raw.source!==undefined?{source:raw.source}:{})};
       const existing=first('SELECT id FROM project_revisions WHERE project=? AND id=?',projectId,raw.id);
       if(existing) {
         const old=getRevision(raw.id),{state:oldState,components,...oldMetadata}=old;
