@@ -276,6 +276,7 @@
         "choices"
       ]
     },
+    "BoardSnapshot":{"type":"object","required":["projectId","branch","revisionId","boards"],"additionalProperties":false,"properties":{"projectId":{"$ref":"#/$defs/identifier"},"branch":{"type":["string","null"]},"revisionId":{"$ref":"#/$defs/identifier"},"boards":{"type":["object","null"],"description":"Exact revision board state; null denotes unknown historical state."}}},
     "Error": {
       "type": "object",
       "required": [

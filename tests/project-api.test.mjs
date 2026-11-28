@@ -152,3 +152,33 @@ test('bearer authorizer requires verified subject, resource audience, project me
   assert.throws(() => createProjectResourceMetadata({ resource, authorizationServers: ['http://issuer.example'] }), /HTTPS/);
   assert.deepEqual(createProjectResourceMetadata({ resource, authorizationServers: ['https://issuer.example'] }).scopes_supported, ['turnkey:read', 'turnkey:write']);
 });
+
+test('conditional board snapshots authorize every read and avoid resolving state for 304',async()=>{
+  const {service,store,calls,grants}=fixture();
+  store.getRevision=(id,options)=>{calls.push({name:'getRevision',args:[id,options]});return {id,state:{boards:{pins:[{id:'pin-'+id}]}}};};
+  const first=await handleProjectRequest(req('board-snapshot?branch=main',undefined,'reader'),service);
+  assert.equal(first.status,200);const etag=first.headers.get('ETag');assert.ok(etag);
+  assert.equal(first.headers.get('Cache-Control'),'private, no-cache');assert.equal(first.headers.get('Vary'),'Authorization, Cookie');
+  assert.deepEqual(await first.json(),{projectId:'synthetic-cabin',branch:'main',revisionId:'r1',boards:{pins:[{id:'pin-r1'}]}});
+  calls.length=0;
+  const unchanged=await handleProjectRequest(req('board-snapshot?branch=main',undefined,'reader',{'If-None-Match':etag}),service);
+  assert.equal(unchanged.status,304);assert.equal(await unchanged.text(),'');assert.equal(unchanged.headers.get('ETag'),etag);
+  assert.deepEqual(calls,[{name:'getRevision',args:['r1',{includeState:false}]}]);
+  const denied=await handleProjectRequest(req('board-snapshot?branch=main',undefined,'absent',{'If-None-Match':etag}),service);assert.equal(denied.status,401);
+  assert.equal(grants.at(-1).action,'read');assert.equal(grants.at(-1).tool,'get_board_snapshot');
+  assert.equal((await handleProjectRequest(req('board-snapshot?branch=main',undefined,'reader',{'If-None-Match':'"other", W/'+etag}),service)).status,304);
+});
+
+test('snapshot selectors are explicit, branch resolution happens once, and exact revisions stay pinned',async()=>{
+  const {service,store}=fixture();let reads=0,head='r1';
+  store.listBranches=()=>{reads++;const result=[{name:'main',headRevisionId:head}];head='r2';return result;};
+  store.getRevision=id=>{if(id==='missing')throw new DesignError(404,'not_found','Missing revision');return{id,state:{boards:id==='source'?null:{pins:[{id}]}}};};
+  const response=await handleProjectRequest(req('board-snapshot?branch=main'),service);assert.equal(reads,1);assert.equal((await response.json()).revisionId,'r1');
+  const next=await handleProjectRequest(req('board-snapshot?branch=main',undefined,'reader',{'If-None-Match':response.headers.get('ETag')}),service);assert.equal(next.status,200);assert.equal((await next.json()).revisionId,'r2');
+  const historical=await handleProjectRequest(req('board-snapshot?revisionId=r1'),service);assert.deepEqual(await historical.json(),{projectId:'synthetic-cabin',branch:null,revisionId:'r1',boards:{pins:[{id:'r1'}]}});
+  assert.notEqual(historical.headers.get('ETag'),response.headers.get('ETag'));assert.equal(reads,2);
+  const unknownBoards=await handleProjectRequest(req('board-snapshot?revisionId=source'),service);assert.equal((await unknownBoards.json()).boards,null);
+  for(const query of ['', '?branch=main&revisionId=r1','?branch=','?branch=main&branch=main','?revisionId=r1&unexpected=value'])assert.equal((await handleProjectRequest(req('board-snapshot'+query),service)).status,400,query);
+  assert.equal((await handleProjectRequest(req('board-snapshot?branch=missing'),service)).status,404);
+  assert.equal((await handleProjectRequest(req('board-snapshot?revisionId=missing',undefined,'reader',{'If-None-Match':'*'}),service)).status,404);
+});

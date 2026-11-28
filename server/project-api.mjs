@@ -142,7 +142,28 @@ export function createProjectService({ store, authorize, roomContext, capabiliti
       default: return descriptor.execute(input, context);
     }
   }
-  return { projectId: store.projectId, authenticate, execute, listTools: publicTools, schema: projectSchema };
+  async function boardSnapshot(request, input) {
+    // Authorize before revealing a branch, revision, or even a cache hit.
+    await authenticate(request, 'read', 'get_board_snapshot');
+    validateToolArguments(input, {type:'object',properties:{branch:{type:'string',minLength:1,maxLength:1024},revisionId:{type:'string',minLength:1,maxLength:1024}},additionalProperties:false});
+    if (Object.hasOwn(input,'branch') === Object.hasOwn(input,'revisionId')) fail(400,'snapshot_selector','Supply exactly one explicit branch or revisionId.');
+    let revisionId=input.revisionId;
+    const branch=input.branch??null;
+    if(branch!==null) {
+      // Resolve a mutable branch once. Everything after this point uses the
+      // immutable revision, even if a concurrent writer advances that branch.
+      revisionId=store.listBranches().find(item=>item.name===branch)?.headRevisionId;
+      if(!revisionId) fail(404,'not_found','Project branch was not found.');
+    }
+    store.getRevision(revisionId,{includeState:false});
+    const etag='"board-v1:'+encodeURIComponent(JSON.stringify([store.projectId,branch,revisionId]))+'"';
+    const headers={ETag:etag,'Cache-Control':'private, no-cache',Vary:'Authorization, Cookie'};
+    const conditional=request.headers.get('If-None-Match');
+    if(conditional && (conditional.trim()==='*'||conditional.split(',').some(value=>value.trim().replace(/^W\//,'')===etag))) return new Response(null,{status:304,headers});
+    const revision=store.getRevision(revisionId,{includeState:true});
+    return jsonResponse({projectId:store.projectId,branch,revisionId,boards:revision.state.boards??null},200,headers);
+  }
+  return { projectId: store.projectId, authenticate, execute, boardSnapshot, listTools: publicTools, schema: projectSchema };
 }
 
 export const isProjectRoute = path => path === '/api/projects' || path.startsWith('/api/projects/');
@@ -163,6 +184,10 @@ export async function handleProjectRequest(request, service) {
     if (route[0] === 'events' && query.cursor !== undefined) query.cursor = Number(query.cursor);
     let tool; let pathArgs = {};
     const key = request.method + ' ' + route.join('/');
+    if (key === 'GET board-snapshot') {
+      if([...url.searchParams.keys()].some(name=>url.searchParams.getAll(name).length!==1)) {await service.authenticate(request);fail(400,'snapshot_selector','Snapshot selectors must not be repeated.');}
+      return await service.boardSnapshot(request,query);
+    }
     if (key === 'GET ' || key === 'GET documentation') tool = 'get_model_documentation';
     else if (key === 'GET schemas/project-v1.json') { await service.authenticate(request); return jsonResponse(service.schema); }
     else if (key === 'GET branches') tool = 'list_branches';
