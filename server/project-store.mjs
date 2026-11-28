@@ -84,9 +84,9 @@ export function createProjectStore({sql,transaction,projectId,validateState,make
       return copy(result);
     });
   }
-  function publish(input,state,parents,type='project.revision_committed',extra={}) {
+  function publish(input,state,parents,type='project.revision_committed',extra={},allowIncompleteParent=false) {
     state=normalizeProjectState(state);
-    const parent=getRevision(parents[0]); assertComplete(parent);
+    const parent=getRevision(parents[0]); if(!allowIncompleteParent) assertComplete(parent);
     validate(state,parent.state,{kind:type,parentRevisionIds:parents,...extra});
     const id=makeId();
     const rev={schemaVersion:1,id,projectId,parentRevisionIds:parents,createdAt:now(),actor:input.actor,...revisionFields(input),operationId:input.operationId,completeness:'complete',components:storeComponents(state),...extra};
@@ -164,6 +164,22 @@ export function createProjectStore({sql,transaction,projectId,validateState,make
     checkHead(op.branch,op.expectedHeadRevisionId);const desired=getRevision(op.revisionId);assertComplete(desired);
     return publish(op,desired.state,[op.expectedHeadRevisionId],'project.reverted',{restoredRevisionId:desired.id});
   });}
+  function hydrate(input) {return operation('hydrate',input,op=>{
+    checkHead(op.branch,op.expectedHeadRevisionId);
+    const parent=getRevision(op.expectedHeadRevisionId);
+    if(parent.completeness!=='source-only') throw projectError(409,'already_complete','Hydration requires an incomplete imported source revision.');
+    if(typeof validateState!=='function') throw projectError(409,'hydration_validator_required','Hydration requires a trusted project validator and prepared source evidence.');
+    const state=normalizeProjectState(op.state), reconstruction=op.reconstruction;
+    if(!reconstruction || reconstruction.sourceRevisionId!==parent.id || typeof reconstruction.note!=='string' || !reconstruction.note.trim() || !['recorded-layout','authored-reconstruction'].includes(reconstruction.kind) || !['initialized-empty','supplied-recorded'].includes(reconstruction.boardState)) {
+      throw projectError(400,'invalid_reconstruction','Declare the source revision, recorded-layout or authored-reconstruction basis, board-state origin, and review note.');
+    }
+    if(state.repository.commit!==parent.state.repository.commit || state.design.geometryRevision!==parent.state.repository.commit) throw projectError(409,'hydration_revision_mismatch','Hydration must retain the historical repository and geometry revision. Publish subsequent geometry changes separately.');
+    if(reconstruction.kind==='recorded-layout') {
+      if(!parent.state.design || !equal(parent.state.design,state.design)) throw projectError(409,'recorded_layout_changed','Recorded-layout hydration must preserve the original furniture snapshot exactly.');
+    } else if(parent.state.design) throw projectError(409,'recorded_layout_available','A recorded furniture snapshot exists; preserve it rather than substituting a reconstruction.');
+    if(reconstruction.boardState==='initialized-empty' && Object.values(state.boards).some(value=>Array.isArray(value)&&value.length)) throw projectError(400,'board_origin_mismatch','An initialized-empty board cannot contain historical records.');
+    return publish(op,state,[parent.id],'project.hydrated',{reconstruction},true);
+  });}
   function history({head:revisionId,cursor=null,limit=50}) {
     required(revisionId,'history head');
     if(!Number.isSafeInteger(limit)||limit<1||limit>200) throw projectError(400,'invalid_limit','History limit must be 1–200.');
@@ -232,5 +248,5 @@ export function createProjectStore({sql,transaction,projectId,validateState,make
     const row=first('SELECT result FROM project_operations WHERE project=? AND id=?',projectId,required(operationId,'operation ID'));
     if(!row) throw missing('Operation receipt'); return JSON.parse(row.result);
   }
-  return {projectId,getRevision,listBranches,createBranch,commit,history,compare,prepareMerge,getMergePlan,resolveMerge,commitMerge,revert,events,importHistory,receipt};
+  return {projectId,getRevision,listBranches,createBranch,commit,history,compare,prepareMerge,getMergePlan,resolveMerge,commitMerge,revert,events,importHistory,receipt,hydrate};
 }

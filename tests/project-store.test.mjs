@@ -138,3 +138,29 @@ test('direct store callers cannot bypass project scope or revision schema',()=>{
   assert.throws(()=>store.importHistory({operationId:'wrong-import',actor,revisions:[{projectId:'different',id:'wrong',parentRevisionIds:[],createdAt:'2020-01-01',actor:null,state:{repository:{commit:sha}}}],branches:[]}),e=>e.code==='project_mismatch');
   assert.equal(store.listBranches()[0].headRevisionId,'root');assert.equal(store.events().events.length,1);
 });
+
+test('reviewed hydration creates an editable child and preserves historical uncertainty',()=>{
+  const seen=[];const {store}=fixture({validateState(state,parent,context){seen.push(context);if(context.kind==='project.hydrated'&&context.reconstruction.note==='reject')return false;}});
+  const source={id:'historical-source',parentRevisionIds:[],createdAt:'2020-01-01',actor:null,state:{repository:{commit:sha},design:null,boards:null,viewer:{availability:'source'}},completeness:'source-only'};
+  store.importHistory({operationId:'old-source',actor,revisions:[source],branches:[{name:'historical-option',headRevisionId:source.id}]});
+  const input={branch:'historical-option',expectedHeadRevisionId:source.id,operationId:'hydrate',actor,state:baseState(),reconstruction:{kind:'authored-reconstruction',sourceRevisionId:source.id,note:'Rebuilt from retained authored schedule and validated artifact.',boardState:'initialized-empty'}};
+  const result=store.hydrate(input);assert.deepEqual(store.hydrate(input),result);
+  const child=store.getRevision(result.revisionId);assert.equal(child.completeness,'complete');assert.deepEqual(child.parentRevisionIds,[source.id]);assert.deepEqual(child.reconstruction,input.reconstruction);
+  const original=store.getRevision(source.id);assert.equal(original.completeness,'source-only');assert.equal(original.state.design,null);assert.equal(original.actor,null);
+  assert.equal(seen.at(-1).kind,'project.hydrated');assert.equal(store.events().events.at(-1).type,'project.hydrated');
+  const next=edit(store,'historical-option',child.id,'continue-design',state=>state.design.instances[0].xMm=70);assert.equal(store.getRevision(next).state.design.instances[0].xMm,70);
+  assert.throws(()=>store.hydrate({...input,operationId:'stale'}),error=>error.code==='branch_conflict');
+  assert.throws(()=>store.hydrate({...input,reconstruction:{...input.reconstruction,note:'changed'}}),error=>error.code==='operation_reused');
+});
+test('hydration fails closed without validator and cannot rewrite recorded layout or geometry',()=>{
+  for(const mode of ['no-validator','recorded-change','geometry-change','fake-empty','validator-failure']) {
+    const {store}=fixture(mode==='no-validator'?{}:{validateState(_state,_parent,context){return context.kind!=='project.hydrated'||mode!=='validator-failure';}});
+    const source={id:'old-layout',parentRevisionIds:[],createdAt:'2020-01-01',actor:null,state:{...baseState(),boards:null},completeness:'source-only'};
+    store.importHistory({operationId:'old',actor,revisions:[source],branches:[{name:'old-option',headRevisionId:source.id}]});
+    const input={branch:'old-option',expectedHeadRevisionId:source.id,operationId:'hydrate',actor,state:baseState(),reconstruction:{kind:'recorded-layout',sourceRevisionId:source.id,note:'Preserve recorded layout',boardState:'initialized-empty'}};
+    if(mode==='recorded-change')input.state.design.instances[0].xMm=400;
+    if(mode==='geometry-change')input.state.repository.commit=otherSha;
+    if(mode==='fake-empty')input.state.boards.pins.push({id:'invented'});
+    assert.throws(()=>store.hydrate(input));assert.equal(store.listBranches().find(b=>b.name==='old-option').headRevisionId,source.id);assert.equal(store.events().events.filter(e=>e.type==='project.hydrated').length,0);
+  }
+});
