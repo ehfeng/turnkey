@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { createProjectStore } from '../server/project-store.mjs';
-import { mergeProjectStates } from '../shared/project-merge.mjs';
+import { mergeProjectStates, diffProjectStates } from '../shared/project-merge.mjs';
 
 const sha='a'.repeat(40), otherSha='b'.repeat(40);
 const baseState=()=>({repository:{commit:sha},design:{schemaVersion:1,geometryRevision:sha,instances:[{id:'chair',roomId:'studio',assetRevision:'asset:oak',xMm:10,yMm:20,zMm:0,yawDeg:0}]},boards:{schemaVersion:1,floorPlans:[],pins:[],memberships:[]},viewer:{packageRevision:'fixture-1'}});
@@ -70,8 +70,8 @@ test('both merge heads are guarded and stale plans stay readable',()=>{
 });
 test('same-field and add/add conflicts never use silent last-writer wins',()=>{
   const base={pins:[{id:'x',title:'old'}]},target={pins:[{id:'x',title:'ours'},{id:'new',title:'a'}]},source={pins:[{id:'new',title:'b'},{id:'x',title:'theirs'}]};
-  const merge=mergeProjectStates(base,target,source);assert.equal(merge.conflicts.length,2);
-  assert.deepEqual(new Set(merge.conflicts.map(x=>x.kind)),new Set(['value','add/add']));
+  const merge=mergeProjectStates(base,target,source);assert.equal(merge.conflicts.length,3);
+  assert.deepEqual(new Set(merge.conflicts.map(x=>x.kind)),new Set(['value','add/add','ordering']));
   assert.throws(()=>mergeProjectStates(base,target,source,{'/missing':{choice:'target'}}),e=>e.code==='unknown_conflict');
 });
 test('repository/geometry change requires validator and invalid merge blocks',()=>{
@@ -120,4 +120,13 @@ test('historical reads and caller mutation cannot rewrite retained state',()=>{
   const {store}=fixture();const read=store.getRevision('root');read.state.design.instances[0].xMm=9999;
   assert.equal(store.getRevision('root').state.design.instances[0].xMm,10);
   assert.deepEqual(store.receipt('seed').branches,[{name:'main',headRevisionId:'root'}]);
+});
+test('stable-ID sequence merges independent insertions and exposes incompatible order',()=>{
+  const list=ids=>({items:ids.map(id=>({id}))});
+  const insertion=mergeProjectStates(list(['a','b']),list(['a','x','b']),list(['a','b','y']));
+  assert.equal(insertion.conflicts.length,0);assert.deepEqual(insertion.candidate.items.map(x=>x.id),['a','x','b','y']);
+  const base=list(['a','b','c']),target=list(['b','a','c']),source=list(['a','c','b']);
+  const merge=mergeProjectStates(base,target,source);assert.equal(merge.conflicts.length,1);assert.equal(merge.conflicts[0].kind,'ordering');
+  const resolved=mergeProjectStates(base,target,source,{[merge.conflicts[0].id]:{choice:'source'}});assert.deepEqual(resolved.candidate,source);
+  assert.deepEqual(diffProjectStates(base,target).map(x=>x.path),['/items/$order']);
 });

@@ -89,7 +89,7 @@ export function createProjectStore({sql,transaction,projectId,validateState,make
     emit(type,input.operationId,input.actor,input.branch,parents[0],id,{affectedObjectIds:rev.affectedObjectIds});
     return {projectId,branch:input.branch,headRevisionId:id,revisionId:id};
   }
-  function listBranches() {return rows('SELECT name,head AS headRevisionId FROM project_branches WHERE project=? ORDER BY name',projectId);}
+  function listBranches() {return rows('SELECT name,head AS headRevisionId FROM project_branches WHERE project=? ORDER BY name',projectId).map(row=>({...row}));}
   function createBranch(input) {
     return operation('create_branch',input,op=>{
       required(op.name,'branch name'); getRevision(op.fromRevisionId);
