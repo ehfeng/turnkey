@@ -31,7 +31,8 @@
     "./project-mcp": "./server/project-mcp.mjs",
     "./project-docs": "./server/project-docs.mjs",
     "./project-board": "./shared/project-board.mjs",
-    "./project-assets": "./server/project-assets.mjs"
+    "./project-assets": "./server/project-assets.mjs",
+    "./project-board-tools": "./server/project-board-tools.mjs"
   },
   "files": [
     "bin",
