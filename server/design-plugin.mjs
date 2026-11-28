@@ -22,15 +22,16 @@ export function nodeDesignStorage(db) {
 }
 
 export function designServicePlugin({ projectRoot, projectId, seedSnapshot, validateSnapshot,
-  capabilities = { writable: true, authRequired: false }, databasePath = join(projectRoot, '.turnkey', 'designs.sqlite') }) {
+  capabilities = { writable: true, authRequired: false }, databasePath = join(projectRoot, '.turnkey', 'designs.sqlite'),
+  handlesRequest = isDesignRoute, beforeRequest }) {
   function attach(server) {
-    let db, opening;
+    let db, opening, storage;
     async function openStore() {
       const { DatabaseSync } = await import('node:sqlite');
       if (databasePath !== ':memory:') mkdirSync(dirname(databasePath), { recursive: true });
       db = new DatabaseSync(databasePath);
       try {
-        const storage = nodeDesignStorage(db);
+        storage = nodeDesignStorage(db);
         // A project may need to read its bundled manifest before the initial migration.
         const hasHistory = storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='design_branches'").length &&
           storage.sql.exec('SELECT head FROM design_branches WHERE project=? AND name=?', projectId, 'main').length;
@@ -44,15 +45,18 @@ export function designServicePlugin({ projectRoot, projectId, seedSnapshot, vali
     }
     server.httpServer?.once('close', () => { db?.close(); });
     server.middlewares.use(async (req, res, next) => {
-      if (!isDesignRoute((req.url || '').split('?')[0])) return next();
+      if (!handlesRequest((req.url || '').split('?')[0])) return next();
       try {
         const url = new URL(req.url, (req.socket.encrypted ? 'https://' : 'http://') + req.headers.host);
         const init = { method: req.method, headers: req.headers };
         if (req.method !== 'GET' && req.method !== 'HEAD') Object.assign(init, { body: req, duplex: 'half' });
         opening ??= openStore().catch(error => { opening = undefined; throw error; });
         const writable = capabilities.writable !== false && isLocalDesignEditor(req);
-        const response = await handleDesignRequest(new Request(url, init), {
-          store: await opening, capabilities: { ...capabilities, writable }, authorizeSave: () => writable,
+        const request = new Request(url, init);
+        const store = await opening;
+        const intercepted = await beforeRequest?.({ request, store, storage, writable });
+        const response = intercepted ?? await handleDesignRequest(request, {
+          store, capabilities: { ...capabilities, writable }, authorizeSave: () => writable,
         });
         res.writeHead(response.status, Object.fromEntries(response.headers));
         res.end(Buffer.from(await response.arrayBuffer()));
