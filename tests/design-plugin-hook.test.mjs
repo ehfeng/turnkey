@@ -22,3 +22,17 @@ test('project hook shares storage and intercepts without seeding legacy head',as
    assert.deepEqual(result,{status:200,body:{project:true}});
  } finally {server.httpServer.emit('close');}
 });
+
+test('an unhandled optional asset route continues through the host middleware',async()=>{
+ const server={httpServer:new EventEmitter(),middlewares:{use(handler){this.handler=handler;}}};
+ const plugin=designServicePlugin({projectRoot:'/unused',projectId:'synthetic',databasePath:':memory:',
+   seedSnapshot:{schemaVersion:1,geometryRevision:'a'.repeat(40),instances:[]},
+   handlesRequest:()=>true,beforeRequest:()=>null});
+ plugin.configureServer(server);
+ try {
+   const req=Readable.from([]);Object.assign(req,{url:'/assets/unchanged.png',method:'GET',headers:{host:'localhost:3000'},socket:{remoteAddress:'127.0.0.1'}});
+   let continued=false;
+   await server.middlewares.handler(req,{writeHead(){assert.fail('An optional miss must not become a design API response');}},error=>{assert.ifError(error);continued=true;});
+   assert.equal(continued,true);
+ } finally {server.httpServer.emit('close');}
+});

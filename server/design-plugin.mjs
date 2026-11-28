@@ -55,6 +55,7 @@ export function designServicePlugin({ projectRoot, projectId, seedSnapshot, vali
         const request = new Request(url, init);
         const store = await opening;
         const intercepted = await beforeRequest?.({ request, store, storage, writable });
+        if (!intercepted && !isDesignRoute(url.pathname)) return next();
         const response = intercepted ?? await handleDesignRequest(request, {
           store, capabilities: { ...capabilities, writable }, authorizeSave: () => writable,
         });
