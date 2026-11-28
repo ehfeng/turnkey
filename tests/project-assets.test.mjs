@@ -16,3 +16,12 @@ test('truncated PNG and tampered chunk contents fail before storing',async()=>{
   await assert.rejects(()=>describeProjectImage(bytes.slice(0,24)),/incomplete|truncated/);
   const bad=bytes.slice();bad[20]^=1;await assert.rejects(()=>describeProjectImage(bad),/checksum/);
 });
+
+test('indexed PNG without a palette and unknown critical chunks are rejected',async()=>{
+  const checksum=data=>{let n=0xffffffff;for(const b of data){n^=b;for(let i=0;i<8;i++)n=(n&1)?0xedb88320^(n>>>1):n>>>1;}return (n^0xffffffff)>>>0;};
+  const indexed=bytes.slice();indexed[25]=3;new DataView(indexed.buffer).setUint32(29,checksum(indexed.subarray(12,29)));
+  await assert.rejects(()=>describeProjectImage(indexed),/palette/);
+  const chunk=new Uint8Array(12);chunk.set(new TextEncoder().encode('ABCD'),4);new DataView(chunk.buffer).setUint32(8,checksum(chunk.subarray(4,8)));
+  const unknown=new Uint8Array(bytes.length+chunk.length);unknown.set(bytes.subarray(0,33));unknown.set(chunk,33);unknown.set(bytes.subarray(33),45);
+  await assert.rejects(()=>describeProjectImage(unknown),/critical chunk/);
+});

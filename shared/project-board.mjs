@@ -73,15 +73,15 @@ export function validateProjectBoards(value) {
     text(pin.title,'/pins/title');
     if (!roles.has(pin.role)) fail('/pins/role','Choose current_photo, model_render, inspiration or generated_concept.');
     if (pin.assetId && !assets.has(pin.assetId)) fail('/pins/assetId','Unknown image asset.');
-    if (!pin.assetId && !pin.sourceUrl) fail('/pins','Supply an image or source URL.');
-    if (pin.sourceUrl) {
-      let url; try { url=new URL(pin.sourceUrl); } catch { fail('/pins/sourceUrl','Expected an HTTPS or HTTP URL.'); }
-      if (!['https:','http:'].includes(url.protocol)) fail('/pins/sourceUrl','Expected an HTTPS or HTTP URL.');
+    if (!pin.assetId && !pin.imageUrl && !pin.sourceUrl) fail('/pins','Supply an image or source URL.');
+    for(const field of ['sourceUrl','imageUrl']) if (pin[field]) {
+      let url; try { url=new URL(pin[field]); } catch { fail('/pins/'+field,'Expected an HTTPS or HTTP URL.'); }
+      if (!['https:','http:'].includes(url.protocol)) fail('/pins/'+field,'Expected an HTTPS or HTTP URL.');
     }
     if (pin.role === 'model_render') text(pin.projectRevisionId,'/pins/projectRevisionId');
     if (pin.role === 'generated_concept') {
       text(pin.prompt,'/pins/prompt');
-      if (!Array.isArray(pin.inputImageIds) || pin.inputImageIds.some(id=>!pins.has(id))) fail('/pins/inputImageIds','Identify the source image pins.');
+      if (!Array.isArray(pin.inputImageIds) || new Set(pin.inputImageIds).size!==pin.inputImageIds.length || pin.inputImageIds.some(id=>id===pin.id||!pins.has(id))) fail('/pins/inputImageIds','Identify the source image pins.');
     }
   }
   const pairs=new Set();
@@ -89,6 +89,7 @@ export function validateProjectBoards(value) {
     if (!pins.has(member.pinId)) fail('/memberships/pinId','Unknown pin.');
     // Existing repository room IDs may precede PNG mapping. The project adapter validates their ownership.
     text(member.roomId,'/memberships/roomId');
+    if(member.roomId==='inbox')fail('/memberships/roomId','Inbox is the set of unassigned pins, not a room.');
     const key=JSON.stringify([member.roomId,member.pinId]);
     if (pairs.has(key)) fail('/memberships','A pin belongs to each room at most once.');
     pairs.add(key);

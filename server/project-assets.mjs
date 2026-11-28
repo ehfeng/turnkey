@@ -6,17 +6,22 @@ const invalid = message => { throw new DesignError(400,'invalid_image',message);
 const crcTable = Uint32Array.from({length:256},(_,n)=>{for(let i=0;i<8;i++)n=(n&1)?0xedb88320^(n>>>1):n>>>1;return n>>>0;});
 function crc(bytes) {let n=0xffffffff;for(const b of bytes)n=crcTable[(n^b)&255]^(n>>>8);return (n^0xffffffff)>>>0;}
 async function validatePng(bytes) {
-  const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);let offset=8,header,idat=false,end=false,closedData=false;const data=[];
+  const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);let offset=8,header,idat=false,end=false,closedData=false,palette=false;const data=[];
   while(offset+12<=bytes.length){
     const length=view.getUint32(offset),type=new TextDecoder().decode(bytes.slice(offset+4,offset+8)),next=offset+12+length;
     if(next>bytes.length || crc(bytes.subarray(offset+4,next-4))!==view.getUint32(next-4)) invalid('PNG has a truncated chunk or invalid checksum.');
+    if(!/^[A-Za-z]{4}$/.test(type)||type[2]!==type[2].toUpperCase()) invalid('Invalid PNG chunk type.');
+    if(type[0]===type[0].toUpperCase()&&!['IHDR','PLTE','IDAT','IEND'].includes(type)) invalid('Unsupported PNG critical chunk.');
     if(!header && type!=='IHDR') invalid('PNG must start with IHDR.');
     if(type==='IHDR') {
       if(header || length!==13) invalid('Invalid PNG header.');
       header={width:view.getUint32(offset+8),height:view.getUint32(offset+12),depth:bytes[offset+16],color:bytes[offset+17],interlace:bytes[offset+20]};
       const validDepth={0:[1,2,4,8,16],2:[8,16],3:[1,2,4,8],4:[8,16],6:[8,16]};
       if(!header.width||!header.height||header.width*header.height>100_000_000||!validDepth[header.color]?.includes(header.depth)||bytes[offset+18]!==0||bytes[offset+19]!==0||header.interlace>1) invalid('Invalid PNG header values.');
-    } else if(type==='IDAT') {if(closedData)invalid('PNG image data must be contiguous.');idat=true;data.push(bytes.slice(offset+8,next-4));}
+    } else if(type==='PLTE') {
+      if(palette||idat||!length||length%3||length>768||[0,4].includes(header.color)||(header.color===3&&length/3>2**header.depth)) invalid('Invalid PNG palette.');
+      palette=true;
+    } else if(type==='IDAT') {if(header.color===3&&!palette)invalid('Indexed PNG requires a palette before image data.');if(closedData)invalid('PNG image data must be contiguous.');idat=true;data.push(bytes.slice(offset+8,next-4));}
     else {if(idat)closedData=true;if(type==='IEND'){if(length||!idat||next!==bytes.length)invalid('Invalid PNG end.');end=true;}}
     offset=next;if(end)break;
   }
