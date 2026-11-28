@@ -106,6 +106,17 @@ test('optional room context receives exact revision and authenticated context', 
   assert.equal(received.context.actor, 'verified-user');
 });
 
+test('semantic HTTP adapter tools use discovered schema and same authorization boundary', async () => {
+  let invocation;
+  const { service } = fixture({ tools: [{ name: 'attach_reference', description: 'Attach a reference', mutates: true, inputSchema: { type: 'object', required: ['projectId', 'roomId'], properties: { projectId: { type: 'string' }, roomId: { type: 'string' } }, additionalProperties: false }, execute(input, context) { invocation = { input, context }; return { roomId: input.roomId }; } }] });
+  assert.equal((await handleProjectRequest(req('tools/attach_reference', { roomId: 'studio' }, 'reader'), service)).status, 403);
+  const response = await handleProjectRequest(req('tools/attach_reference', { roomId: 'studio' }), service);
+  assert.deepEqual(await response.json(), { roomId: 'studio' });
+  assert.equal(invocation.input.actor, 'verified-user');
+  assert.equal(invocation.context.actor, 'verified-user');
+  assert.equal((await handleProjectRequest(req('tools/not_installed', {}), service)).status, 404);
+});
+
 test('JSON media, size, and primitive guards reject unsafe writes', async () => {
   const { service, calls } = fixture();
   const path = origin + '/api/projects/synthetic-cabin/commits';

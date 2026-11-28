@@ -43,6 +43,7 @@ All paths below follow `/api/projects/{projectId}`. Responses are JSON and `Cach
 | GET `/events?cursor=0&limit=100` | Numeric event cursor | Durable events and numeric next cursor |
 | GET `/operations/{operationId}` | Original retry ID | Original operation result |
 | GET `/rooms/{roomId}/context?revisionId=...` | Exact revision | Optional adapter room context |
+| POST `/tools/{toolName}` | The discovered tool's arguments | Same shared service as MCP, including optional project adapters |
 
 Request JSON is limited to 2 MiB. A stale head returns 409 and the current head ID. Error bodies are `{error:{code,message,details,schemaVersion,documentationTopic}}`. Known project validation failures retain their actionable details; unexpected internal exceptions do not expose stack traces or internal messages. History cursors are opaque strings; event cursors are integers. Branch names and IDs in URL segments must be URL encoded.
 

@@ -173,6 +173,7 @@ export async function handleProjectRequest(request, service) {
     else if (key === 'POST commits') tool = 'commit_changes';
     else if (key === 'POST reverts') tool = 'revert_revision';
     else if (key === 'POST merge-plans') tool = 'prepare_merge';
+    else if (request.method === 'POST' && route.length === 2 && route[0] === 'tools') tool = route[1];
     else if (request.method === 'GET' && route.length === 2 && route[0] === 'revisions') { tool = 'get_project_revision'; pathArgs.revisionId = route[1]; }
     else if (request.method === 'GET' && route.length === 2 && route[0] === 'operations') { tool = 'get_operation_receipt'; pathArgs.operationId = route[1]; }
     else if (request.method === 'GET' && route.length === 3 && route[0] === 'rooms' && route[2] === 'context') { tool = 'get_room_context'; pathArgs.roomId = route[1]; }
