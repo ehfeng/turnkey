@@ -51,7 +51,9 @@ test('routes invoke shared services with exact path IDs and trusted actors', asy
     assert.equal(calls.at(-1).args[0].actor, 'verified-user');
     if (path.startsWith('merge-plans/')) assert.equal(calls.at(-1).args[0].planId, path.split('/')[1]);
   }
-  assert.equal((await handleProjectRequest(req('revisions/r1'), service)).status, 200);
+  const readRevision = await handleProjectRequest(req('revisions/r1'), service);
+  assert.equal(readRevision.status, 200);
+  assert.equal((await readRevision.json()).$schema, '/api/projects/synthetic-cabin/schemas/project-v1.json#/$defs/ProjectRevision');
   assert.deepEqual(calls.at(-1), { name: 'getRevision', args: ['r1', { includeState: true }] });
   assert.equal((await handleProjectRequest(req('history?head=r1&limit=12&cursor=c1'), service)).status, 200);
   assert.deepEqual(calls.at(-1).args[0], { head: 'r1', limit: 12, cursor: 'c1' });

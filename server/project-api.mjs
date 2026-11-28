@@ -101,6 +101,7 @@ export function createProjectService({ store, authorize, roomContext, capabiliti
     names.add(descriptor.name);
   }
   const publicTools = () => descriptors.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }));
+  const documented = (value, definition) => ({ $schema: `/api/projects/${encodeURIComponent(store.projectId)}/schemas/project-v1.json#/$defs/${definition}`, ...value });
   async function authenticate(request, action = 'read', tool = 'discovery') {
     const origin = request.headers.get('Origin');
     if (origin && origin !== new URL(request.url).origin && !allowedOrigins.includes(origin)) fail(403, 'forbidden_origin', 'This origin is not authorized.');
@@ -124,15 +125,15 @@ export function createProjectService({ store, authorize, roomContext, capabiliti
         if (!result) fail(404, 'unknown_topic', 'Documentation topic was not found.');
         return result;
       }
-      case 'get_project_revision': return store.getRevision(input.revisionId, { includeState: true });
+      case 'get_project_revision': return documented(store.getRevision(input.revisionId, { includeState: true }), 'ProjectRevision');
       case 'list_project_history': return store.history(input);
       case 'list_branches': return { schemaVersion: 1, projectId: store.projectId, branches: store.listBranches() };
       case 'create_branch': return store.createBranch(input);
       case 'compare_revisions': return store.compare(input);
       case 'commit_changes': return store.commit(input);
-      case 'prepare_merge': return store.prepareMerge(input);
-      case 'get_merge_plan': return store.getMergePlan(input.planId);
-      case 'resolve_merge_conflicts': return store.resolveMerge(input);
+      case 'prepare_merge': return documented(store.prepareMerge(input), 'MergePlan');
+      case 'get_merge_plan': return documented(store.getMergePlan(input.planId), 'MergePlan');
+      case 'resolve_merge_conflicts': return documented(store.resolveMerge(input), 'MergePlan');
       case 'commit_merge': return store.commitMerge(input);
       case 'revert_revision': return store.revert(input);
       case 'list_project_events': return store.events(input);
