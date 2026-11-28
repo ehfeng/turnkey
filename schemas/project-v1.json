@@ -1,0 +1,306 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:turnkey:project:v1",
+  "title": "Turnkey project contracts, version 1",
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "Branch": {
+      "type": "object",
+      "required": [
+        "name",
+        "headRevisionId"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "headRevisionId": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "ProjectRevision": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "id",
+        "projectId",
+        "parentRevisionIds",
+        "components",
+        "completeness",
+        "actor",
+        "createdAt",
+        "message",
+        "operationId",
+        "affectedObjectIds"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "projectId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "parentRevisionIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "uniqueItems": true
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "actor": {},
+        "operationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "components": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "completeness": {
+          "enum": [
+            "complete",
+            "source-only"
+          ]
+        },
+        "source": {
+          "type": "object"
+        },
+        "affectedObjectIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ProjectState": {
+      "type": "object",
+      "description": "Immutable resolved component values. Repository-owned geometry is changed only through a supported project adapter. Imported partial records may omit unavailable components.",
+      "properties": {
+        "repository": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "design": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "boards": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "viewer": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    },
+    "DesignSnapshot": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "geometryRevision",
+        "instances"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "geometryRevision": {
+          "type": "string"
+        },
+        "instances": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "roomId",
+              "assetRevision",
+              "xMm",
+              "yMm",
+              "zMm",
+              "yawDeg"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "roomId": {
+                "type": "string"
+              },
+              "assetRevision": {
+                "type": "string"
+              },
+              "xMm": {
+                "type": "number"
+              },
+              "yMm": {
+                "type": "number"
+              },
+              "zMm": {
+                "type": "number"
+              },
+              "yawDeg": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    },
+    "MergePlan": {
+      "type": "object",
+      "required": [
+        "id",
+        "sourceHeadRevisionId",
+        "targetHeadRevisionId",
+        "baseRevisionId",
+        "conflicts"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "sourceBranch": {
+          "type": "string"
+        },
+        "targetBranch": {
+          "type": "string"
+        },
+        "sourceHeadRevisionId": {
+          "type": "string"
+        },
+        "targetHeadRevisionId": {
+          "type": "string"
+        },
+        "baseRevisionId": {
+          "type": "string"
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Conflict"
+          }
+        },
+        "candidate": {
+          "$ref": "#/$defs/ProjectState"
+        },
+        "validation": {},
+        "preview": {}
+      }
+    },
+    "Conflict": {
+      "type": "object",
+      "description": "Base, target and source values plus explicit presence flags distinguish deletion from JSON null.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "entityId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base": {},
+        "target": {},
+        "source": {},
+        "kind": {
+          "type": "string"
+        },
+        "present": {
+          "type": "object",
+          "required": [
+            "base",
+            "target",
+            "source"
+          ],
+          "properties": {
+            "base": {
+              "type": "boolean"
+            },
+            "target": {
+              "type": "boolean"
+            },
+            "source": {
+              "type": "boolean"
+            }
+          }
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "path",
+        "kind",
+        "present",
+        "choices"
+      ]
+    },
+    "Error": {
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "schemaVersion",
+        "documentationTopic"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "documentationTopic": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}
